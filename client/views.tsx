@@ -266,7 +266,7 @@ export function AccountPopover(
           theme={props.theme}
           disabled={busy}
           onPress={() =>
-            void act(async () => (await refresh({})).map((v) => v.result))
+            void act(async () => (await refresh({})).map((v) => ({...v.result,message:`${v.provider?providerLabel[v.provider]:"SubBaton"}: ${v.result.message}`})))
           }
         />
         <Button
@@ -306,8 +306,7 @@ export function AccountPopover(
           </Text>
           {provider.cacheStatus !== "available" && (
             <Text style={{ color: c.statusWarning }}>
-              Run this provider's list command once with the signed CLI to
-              populate its snapshot.
+              {provider.provider==="unknown" ? "A newer CLI provider is not supported by this plugin yet." : "Run this provider's list command once with the signed CLI to populate its snapshot."}
             </Text>
           )}
           {provider.cacheStatus === "available" &&
@@ -396,7 +395,7 @@ export function AccountPopover(
                   </Text>
                 </View>
               ))}
-              {!account.active && (
+              {provider.provider!=="unknown" && !account.active && (
                 <Button
                   label={`Switch to ${account.alias}`}
                   theme={props.theme}
@@ -407,14 +406,10 @@ export function AccountPopover(
                       account.health,
                     )
                   }
-                  onPress={() =>
-                    void act(() =>
-                      switchAccount({
-                        provider: provider.provider,
-                        target: account.id,
-                      }),
-                    )
-                  }
+                  onPress={() => {
+                    const selectedProvider=provider.provider;
+                    if(selectedProvider!=="unknown")void act(()=>switchAccount({provider:selectedProvider,target:account.id}));
+                  }}
                 />
               )}
             </View>
@@ -447,8 +442,7 @@ export function AccountPopover(
             </View>
           ) : (
             <Text style={{ color: c.foregroundMuted, fontSize: 11 }}>
-              Quota strategies are currently available for Claude. Named
-              switching is available here.
+              {provider.provider==="unknown" ? "Actions for unknown providers are disabled." : "Quota strategies are currently available for Claude. Named switching is available here."}
             </Text>
           )}
         </View>

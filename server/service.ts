@@ -7,6 +7,7 @@ import {
   type Status,
   type ActionResult,
   type Provider,
+  type StatusResult,
 } from "../shared/contracts.js";
 export interface CliExecutor {
   run(
@@ -38,11 +39,9 @@ const messages: Record<string, string> = {
   deviceBlocked: "The issuer blocked this device/account.",
 };
 export class SubBatonService {
-  private cached: { data: Status; at: number; binary: string } | null = null;
-  private pending: {
-    binary: string;
-    promise: ReturnType<SubBatonService["fetchStatus"]>;
-  } | null = null;
+  private cached:{value:StatusResult;at:number}|null=null;
+  private pending:Promise<StatusResult>|null=null;
+  private knownStatus:Status|null=null;
   private generation = 0;
   private mutating = false;
   constructor(
@@ -75,44 +74,22 @@ export class SubBatonService {
       return {result:value.result} as const;
     }catch{return {error:abnormal("executionFailed","Unable to read SubBaton status. Check the CLI configuration.")} as const;}
   }
-  private async fetchStatus(binary: string, generation: number) {
-    const response = await this.call(["status"], 8000);
-    if (response.error) return { ok: false, data: null, error: response.error };
-    const parsed = statusSchema.safeParse(response.result);
-    if (!parsed.success)
-      return {
-        ok: false,
-        data: null,
-        error: failure(
-          "invalidResponse",
-          "SubBaton status schema is unsupported.",
-        ),
-      };
-    if (generation === this.generation)
-      this.cached = { data: parsed.data, at: this.now(), binary };
-    return { ok: true, data: parsed.data, error: null };
+  configurationChanged(){this.knownStatus=null;this.invalidate();}
+  private async fetchStatus(generation:number):Promise<StatusResult>{
+    const response=await this.call(["status"],8000);
+    if(response.error)return {ok:false,data:null,error:response.error};
+    const parsed=statusSchema.safeParse(response.result);
+    if(!parsed.success)return {ok:false,data:null,error:failure("invalidResponse","SubBaton status schema is unsupported.")};
+    if(generation===this.generation)this.knownStatus=parsed.data;
+    return {ok:true,data:parsed.data,error:null};
   }
-  async status() {
-    try {
-      const binary = await this.binary();
-      if (this.cached?.binary === binary && this.now() - this.cached.at < 15000)
-        return { ok: true, data: this.cached.data, error: null };
-      if (this.pending?.binary === binary) return this.pending.promise;
-      const promise = this.fetchStatus(binary, this.generation);
-      const pending = { binary, promise };
-      this.pending = pending;
-      try {
-        return await promise;
-      } finally {
-        if (this.pending === pending) this.pending = null;
-      }
-    } catch {
-      return {
-        ok: false,
-        data: null,
-        error: failure("configuration", "Check the SubBaton binary setting."),
-      };
-    }
+  async status():Promise<StatusResult>{
+    if(this.cached&&this.now()-this.cached.at<15000)return this.cached.value;
+    if(this.pending)return this.pending;
+    const generation=this.generation;
+    const promise=this.fetchStatus(generation).then(value=>{if(generation===this.generation)this.cached={value,at:this.now()};return value;});
+    this.pending=promise;
+    try{return await promise;}finally{if(this.pending===promise)this.pending=null;}
   }
   private async mutation(argv: string[]): Promise<ActionResult> {
     if (this.mutating)
@@ -193,6 +170,7 @@ export class SubBatonService {
     if (!parsed.success)
       return failure("invalidInput", "Choose a valid saved account.");
     const { provider, target } = parsed.data;
+    if(!this.knownStatus?.providers.find(p=>p.provider===provider)?.accounts.some(a=>a.id===target))return failure("unknownAccount","Reload cached status and choose a known saved account UUID for this provider.");
     return this.mutation([
       ...(provider === "claude" ? [] : [provider]),
       "switch",
@@ -210,21 +188,20 @@ export class SubBatonService {
       );
     return this.mutation([parsed.data.strategy]);
   }
-  async refresh(): Promise<{ provider: Provider; result: ActionResult }[]> {
+  async refresh(): Promise<{ provider: Provider|null; result: ActionResult }[]> {
     if (this.mutating)
       return [
         {
-          provider: "claude",
+          provider: null,
           result: failure("busy", "Another SubBaton action is running."),
         },
       ];
     const current = await this.status();
     if (!current.ok || !current.data)
-      return [{ provider: "claude", result: current.error! }];
-    const results: { provider: Provider; result: ActionResult }[] = [];
-    for (const provider of current.data.providers.filter((p) =>
-      p.accounts.some((a) => a.active),
-    )) {
+      return [{ provider: null, result: current.error! }];
+    const results: { provider: Provider|null; result: ActionResult }[] = [];
+    for (const provider of current.data.providers) {
+      if(provider.provider==="unknown"||!provider.accounts.some(a=>a.active))continue;
       results.push({
         provider: provider.provider,
         result: await this.mutation([

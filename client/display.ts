@@ -5,15 +5,17 @@ import type {
   Window,
   Account,
 } from "../shared/contracts.js";
-export const providerLabel: Record<Provider, string> = {
+export const providerLabel: Record<Provider|"unknown", string> = {
   claude: "Claude",
   codex: "Codex",
   agy: "agy",
+  unknown:"Unknown provider",
 };
-export const providerIcon: Record<Provider, string> = {
+export const providerIcon: Record<Provider|"unknown", string> = {
   claude: "Bot",
   codex: "Terminal",
   agy: "Sparkles",
+  unknown:"HelpCircle",
 };
 export function percentText(value: number | null, stale: boolean) {
   return value === null ? "—" : `${stale ? "~" : ""}${Math.round(value)}%`;

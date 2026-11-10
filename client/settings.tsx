@@ -101,7 +101,7 @@ export function SettingsScreen(props: PluginSurfaceProps) {
   const labels = new Map<string, string>();
   if (query.data?.ok)
     for (const p of query.data.data?.providers ?? [])
-      for (const a of p.accounts)
+      if(p.provider!=="unknown")for (const a of p.accounts)
         for (const w of a.windows) {
           options.push({ provider: p.provider, windowId: w.id });
           labels.set(`${p.provider}:${w.id}`, w.label);

@@ -17,27 +17,31 @@ import { providerLabel, windowTitle } from "./display.js";
 import { useStatus } from "./use-status.js";
 function BinaryForm({
   initial,
+  initialAllowPath,
   save,
   busy,
 }: {
   initial: string;
-  save: (value: string) => Promise<boolean>;
+  initialAllowPath:boolean;
+  save: (value: string,allowPath:boolean) => Promise<boolean>;
   busy: boolean;
 }) {
   const [path, setPath] = useState(initial);
+  const [allowPath,setAllowPath]=useState(initialAllowPath);
   return (
     <SettingsCard>
       <SettingsInput
         label="SubBaton binary"
-        hint="Absolute path, or subbaton on PATH. The default shared location falls back to PATH."
+        hint="Absolute signed path. Canonical ownership, permissions and Developer ID are verified before execution."
         initialValue={initial}
         onChangeText={setPath}
       />
+      <SettingsSwitch label="Allow verified PATH lookup" hint="Off by default. PATH candidates must pass the same ownership, directory and Developer ID checks." value={allowPath} onValueChange={setAllowPath} disabled={busy}/>
       <SettingsAction
         label="Binary path"
         actionLabel="Save"
         disabled={busy || !path.trim()}
-        onPress={() => void save(path.trim())}
+        onPress={() => void save(path.trim(),allowPath)}
       />
     </SettingsCard>
   );
@@ -117,8 +121,9 @@ export function SettingsScreen(props: PluginSurfaceProps) {
           <BinaryForm
             key={String(binary.revision)}
             initial={binary.values.binaryPath}
+            initialAllowPath={binary.values.allowPathLookup}
             busy={binary.saving}
-            save={(path) => binary.save({ binaryPath: path }, binary.revision)}
+            save={(path,allowPathLookup) => binary.save({ binaryPath: path,allowPathLookup }, binary.revision)}
           />
         ) : (
           <Text style={{ color: c.statusWarning }}>

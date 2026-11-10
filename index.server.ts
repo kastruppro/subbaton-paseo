@@ -8,14 +8,15 @@ import {
   refreshRpc,
 } from "./shared/contracts.js";
 import { SubBatonService } from "./server/service.js";
-import { nativeCLI, resolveBinary } from "./server/exec.js";
+import { nativeCLI } from "./server/exec.js";
+import { resolveBinary } from "./server/binary.js";
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(hostSettings);
   server.registerSettings(displaySettings);
   const service = new SubBatonService(nativeCLI, async () => {
     const current = await settings.read();
     if (current.status !== "ready") throw new Error("Settings unavailable");
-    return resolveBinary(current.values.binaryPath);
+    return resolveBinary(current.values.binaryPath,current.values.allowPathLookup);
   });
   server.handle(statusRpc, () => service.status());
   server.handle(switchRpc, (input) => service.switch(input));

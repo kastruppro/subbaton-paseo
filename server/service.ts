@@ -1,3 +1,4 @@
+import { BinaryTrustError } from "./binary.js";
 import { z } from "zod";
 import {
   statusSchema,
@@ -59,7 +60,7 @@ export class SubBatonService {
     const abnormal=(code:string,message:string)=>mutation?uncertain():failure(code,message);
     let binary:string;
     try { binary=await this.binary(); }
-    catch { return {error:failure("configuration","SubBaton binary configuration or trust verification failed. Check its owner, permissions and signature.")} as const; }
+    catch(error) { return {error:failure("configuration",error instanceof BinaryTrustError?error.message:"SubBaton binary configuration or trust verification failed. Check its owner, permissions and signature.")} as const; }
     try {
       const result=await this.cli.run(binary,[...argv,"--json"],timeout);
       if(result.notStarted)return {error:failure("executionFailed","SubBaton did not start. Check the verified binary path and executable permissions.")} as const;

@@ -97,6 +97,7 @@ export const hostSettings = defineSettings({
   scope: "host",
   version: 1,
   schema: z.object({
+    allowPathLookup:z.boolean().default(false),
     binaryPath: z
       .string()
       .min(1)

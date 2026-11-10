@@ -23,3 +23,7 @@ test('M1 parsed refusal remains an error but a thrown crash is uncertain',async(
     const result=await service.strategy({provider:'claude',strategy:'best'});assert.equal(result.outcome,crash?'uncertain':'error');assert.ok(!JSON.stringify(result).includes('secret'));
   }
 });
+test('M1 definite pre-spawn failure stays a configuration error',async()=>{
+  const service=new SubBatonService({async run(){return {code:-1,notStarted:true,stdout:''};}},async()=>'/fixture/subbaton');
+  assert.equal((await service.strategy({provider:'claude',strategy:'best'})).outcome,'error');
+});

@@ -83,3 +83,19 @@ export function windowTitle(id: string, label?: string) {
     (id.startsWith("weekly_scoped:") ? id.slice(14) : "Saved quota window")
   );
 }
+
+export function stripLayout(width:number,count:number){
+  const available=Math.max(0,Number.isFinite(width)?width:0),total=Math.max(0,Math.min(24,Math.floor(count)));
+  for(const [unit,labels,meters]of [[160,true,true],[120,false,true],[96,false,false]] as const){
+    if(total*unit<=available)return {count:total,hidden:0,labels,meters,usedWidth:total*unit};
+  }
+  const shown=Math.min(total,Math.max(0,Math.floor((available-24)/96)));
+  return {count:shown,hidden:total-shown,labels:false,meters:false,usedWidth:Math.min(available,shown*96+24)};
+}
+export function shortWindowTitle(id:string,label?:string){
+  if(id==='five_hour'||label==='5-hour limit')return '5h';
+  if(id==='seven_day'||label==='Weekly limit')return '7d';
+  if(id==='codex:primary_window')return 'P';
+  if(id==='codex:secondary_window')return 'S';
+  return windowTitle(id,label).slice(0,4);
+}

@@ -25,6 +25,8 @@ import {
   stale,
   timestamp,
   windowTitle,
+  stripLayout,
+  shortWindowTitle,
 } from "./display.js";
 import { useStatus } from "./use-status.js";
 function Meter({
@@ -33,12 +35,14 @@ function Meter({
   warning = 75,
   danger = 90,
   offline = false,
+  showBar = true,
 }: {
   theme: PluginTheme;
   window: Window | null;
   warning?: number;
   danger?: number;
   offline?: boolean;
+  showBar?:boolean;
 }) {
   const old = window ? stale(window, offline) : true,
     value = window?.usedPercent ?? null;
@@ -53,7 +57,7 @@ function Meter({
             : theme.colors.accent;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-      <View
+      {showBar&&<View
         style={{
           width: 24,
           height: 4,
@@ -70,8 +74,8 @@ function Meter({
             opacity: old ? 0.4 : 1,
           }}
         />
-      </View>
-      <Text style={{ fontSize: 11, color }}>{percentText(value, old)}</Text>
+      </View>}
+      <Text numberOfLines={1} style={{ fontSize: 11, color,maxWidth:34 }}>{percentText(value, old)}</Text>
     </View>
   );
 }
@@ -81,13 +85,16 @@ export function Footer({
 }: PluginSidebarItemProps & {
   Details: React.ComponentType<PluginPopoverProps>;
 }) {
+  const [width,setWidth]=useState(0);
   const query = useStatus(props.host.id),
     settings = useSettings(displaySettings);
   const data = query.data?.ok ? query.data.data : null;
   const items =
     settings.status === "ready" ? chooseItems(data, settings.values.items) : [];
+  const offline=query.isError||query.data?.ok===false;
+  const line=stripLayout(Math.max(0,width-56-(offline?70:0)),items.length);
   return (
-    <SidebarRow
+    <View style={{alignSelf:"stretch",minWidth:0}} onLayout={event=>setWidth(event.nativeEvent.layout.width)}><SidebarRow
       icon="Gauge"
       label=""
       onPress={() => props.openPopover(Details)}
@@ -99,14 +106,16 @@ export function Footer({
             items
               .map(
                 (item) =>
-                  `${providerLabel[item.provider]} ${windowTitle(item.windowId, item.window?.label)}: ${percentText(item.window?.usedPercent ?? null, item.window ? stale(item.window, query.isError) : true)}`,
+                  `${providerLabel[item.provider]} ${windowTitle(item.windowId,item.window?.label)}: ${percentText(item.window?.usedPercent ?? null, item.window ? stale(item.window, query.isError) : true)}`,
               )
               .join(". ") +
             ". Open account details."
           }
           style={{
             flexDirection: "row",
-            flexWrap: "wrap",
+            flexWrap: "nowrap",
+            width:Math.max(0,width-56),
+            overflow:"hidden",
             alignItems: "center",
             gap: 8,
             paddingVertical: 4,
@@ -122,11 +131,11 @@ export function Footer({
               SubBaton · choose items in settings
             </Text>
           ) : (
-            items.map((item) => (
+            items.slice(0,line.count).map((item) => (
               <View
                 key={`${item.provider}:${item.windowId}`}
                 style={{ flexDirection: "row", alignItems: "center", gap: 3 }}
-                accessibilityLabel={`${providerLabel[item.provider]} ${windowTitle(item.windowId, item.window?.label)} ${item.account?.health ?? "unknown"}`}
+                accessibilityLabel={`${providerLabel[item.provider]} ${line.labels?windowTitle(item.windowId,item.window?.label):shortWindowTitle(item.windowId,item.window?.label)} ${item.account?.health ?? "unknown"}`}
               >
                 <Icon
                   name={providerIcon[item.provider]}
@@ -138,7 +147,7 @@ export function Footer({
                   style={{
                     fontSize: 10,
                     color: props.theme.colors.foregroundMuted,
-                    maxWidth: 58,
+                    maxWidth:line.labels?58:20,
                   }}
                 >
                   {windowTitle(item.windowId, item.window?.label)}
@@ -146,6 +155,7 @@ export function Footer({
                 <Meter
                   theme={props.theme}
                   window={item.window}
+                  showBar={line.meters}
                   warning={
                     settings.status === "ready" ? settings.values.warning : 75
                   }
@@ -162,6 +172,7 @@ export function Footer({
               </View>
             ))
           )}
+          {line.hidden>0&&<Text numberOfLines={1} style={{color:props.theme.colors.foregroundMuted,fontSize:10,maxWidth:24}}>+{line.hidden}</Text>}
           {(query.isError || query.data?.ok === false) && (
             <Text style={{ color: props.theme.colors.statusWarning }}>
               unavailable
@@ -169,7 +180,7 @@ export function Footer({
           )}
         </View>
       }
-    />
+    /></View>
   );
 }
 function Button({

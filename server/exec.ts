@@ -35,16 +35,17 @@ export const nativeCLI: CliExecutor = {
           windowsHide: true,
         },
         (error, stdout) => {
-          const code = error?.killed
-            ? -2
-            : error && "code" in error && typeof error.code === "number"
-              ? error.code
-              : error
-                ? -1
-                : 0;
-          resolve({ code, stdout: stdout ?? "" });
+          resolve({...classifyExit(error),stdout:stdout??""});
         },
       );
     });
   },
 };
+
+export function classifyExit(error:{code?:string|number|null;killed?:boolean;signal?:string|null}|null):{code:number;notStarted:boolean}{
+  if(!error)return {code:0,notStarted:false};
+  if(error.killed||error.signal)return {code:-2,notStarted:false};
+  if(typeof error.code==="number")return {code:error.code,notStarted:false};
+  if(typeof error.code==="string"&&/^E(?!RR_)[A-Z0-9_]+$/.test(error.code))return {code:-1,notStarted:true};
+  return {code:-2,notStarted:false};
+}

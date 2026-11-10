@@ -12,7 +12,7 @@ export interface CliExecutor {
     binary: string,
     argv: string[],
     timeout: number,
-  ): Promise<{ code: number; stdout: string }>;
+  ): Promise<{ code: number; stdout: string; notStarted?:boolean }>;
 }
 const envelope = z.object({
   schemaVersion: z.literal(1),
@@ -54,73 +54,25 @@ export class SubBatonService {
     this.generation++;
     this.pending = null;
   }
-  private async call(argv: string[], timeout = 120000) {
+  private async call(argv: string[], timeout = 120000, mutation=false) {
+    const uncertain=():ActionResult=>({outcome:"uncertain",code:"uncertain",message:"Result uncertain. Run recovery with the SubBaton CLI and inspect current state before retrying. Agents were not reopened."});
+    const abnormal=(code:string,message:string)=>mutation?uncertain():failure(code,message);
+    let binary:string;
+    try { binary=await this.binary(); }
+    catch { return {error:failure("configuration","SubBaton binary configuration or trust verification failed. Check its owner, permissions and signature.")} as const; }
     try {
-      const result = await this.cli.run(
-        await this.binary(),
-        [...argv, "--json"],
-        timeout,
-      );
-      if (result.code === -2)
-        return {
-          error: {
-            outcome: "uncertain",
-            code: "timeout",
-            message:
-              "SubBaton timed out. Inspect current state and pending recovery before retrying; agents were not reopened.",
-          } satisfies ActionResult,
-        } as const;
-      if (Buffer.byteLength(result.stdout) > 1024 * 1024)
-        return {
-          error: failure(
-            "invalidResponse",
-            "SubBaton returned an oversized response.",
-          ),
-        } as const;
-      const parsed = envelope.safeParse(JSON.parse(result.stdout));
-      if (!parsed.success)
-        return {
-          error: failure(
-            "invalidResponse",
-            "Unsupported SubBaton JSON. Update the configured CLI.",
-          ),
-        } as const;
-      const value = parsed.data;
-      if (result.code === 2 && !value.ok && value.error?.code === "uncertain")
-        return {
-          error: {
-            outcome: "uncertain",
-            code: "uncertain",
-            message:
-              "Activation is uncertain. Inspect native state and pending recovery before retrying. Agents were not reopened.",
-          } satisfies ActionResult,
-        } as const;
-      if (result.code === 1 && !value.ok) {
-        const code = value.error?.code ?? "";
-        return {
-          error: failure(
-            messages[code] ? code : "cliError",
-            messages[code] ??
-              "SubBaton refused the operation. Inspect the CLI safely.",
-          ),
-        } as const;
-      }
-      if (result.code !== 0 || !value.ok)
-        return {
-          error: failure(
-            "invalidResponse",
-            "SubBaton returned inconsistent exit/JSON status.",
-          ),
-        } as const;
-      return { result: value.result } as const;
-    } catch {
-      return {
-        error: failure(
-          "executionFailed",
-          "Unable to run SubBaton. Check its binary path, permissions and timeout.",
-        ),
-      } as const;
-    }
+      const result=await this.cli.run(binary,[...argv,"--json"],timeout);
+      if(result.notStarted)return {error:failure("executionFailed","SubBaton did not start. Check the verified binary path and executable permissions.")} as const;
+      if(result.code===2||result.code===-2)return {error:uncertain()} as const;
+      if(Buffer.byteLength(result.stdout)>1024*1024)return {error:abnormal("invalidResponse","SubBaton returned an oversized response.")} as const;
+      const parsed=envelope.safeParse(JSON.parse(result.stdout));
+      if(!parsed.success)return {error:abnormal("invalidResponse","Unsupported SubBaton JSON. Update the configured CLI.")} as const;
+      const value=parsed.data;
+      if(result.code===1&&!value.ok){const code=value.error?.code??"";return {error:failure(messages[code]?code:"cliError",messages[code]??"SubBaton refused the operation. Inspect the CLI safely.")} as const;}
+      if(result.code!==0||!value.ok||!value.result||typeof value.result!=="object")return {error:abnormal("invalidResponse","SubBaton returned inconsistent exit/JSON status.")} as const;
+      if(mutation&&!argv.includes("usage")&&!["switched","unchanged","no-candidate"].includes((value.result as {outcome:string}).outcome))return {error:uncertain()} as const;
+      return {result:value.result} as const;
+    }catch{return {error:abnormal("executionFailed","Unable to read SubBaton status. Check the CLI configuration.")} as const;}
   }
   private async fetchStatus(binary: string, generation: number) {
     const response = await this.call(["status"], 8000);
@@ -167,7 +119,7 @@ export class SubBatonService {
     this.mutating = true;
     this.invalidate();
     try {
-      const response = await this.call(argv);
+      const response = await this.call(argv,120000,true);
       if (response.error) return response.error;
       if (argv.includes("usage")) {
         const status = (response.result as { status?: unknown } | null)?.status;

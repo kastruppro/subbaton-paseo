@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { hostSettings } from "../shared/contracts.js";
 import {
   resolveBinary,
   verifySignature,
@@ -88,6 +89,7 @@ test("M2 permits only trusted ownership permissions and Developer ID signature",
   await assert.rejects(resolveBinary("/safe/subbaton", false, bad.system));
 });
 test("M2 never falls back to PATH without opt-in; PATH entries receive the same checks", async () => {
+  assert.equal(hostSettings.schema.parse({}).allowPathLookup, false);
   const f = fixture();
   f.values.delete("/Users/Shared/subbaton/subbaton");
   await assert.rejects(

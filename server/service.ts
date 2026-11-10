@@ -86,7 +86,12 @@ export class SubBatonService {
           ),
         } as const;
       if (result.code === 2 || result.code === -2)
-        return { error: uncertain() } as const;
+        return {
+          error: abnormal(
+            "statusUnavailable",
+            "SubBaton status could not be read. Retry the cache-only status request later.",
+          ),
+        } as const;
       if (Buffer.byteLength(result.stdout) > 1024 * 1024)
         return {
           error: abnormal(
@@ -128,7 +133,7 @@ export class SubBatonService {
       if (
         mutation &&
         !argv.includes("usage") &&
-        !["switched", "unchanged", "no-candidate"].includes(
+        !["switched", "unchanged", "alreadyActive", "no-candidate"].includes(
           (value.result as { outcome: string }).outcome,
         )
       )
@@ -236,6 +241,12 @@ export class SubBatonService {
           code: "noCandidate",
           message:
             "No eligible quota target. Refresh unknown or stale usage through the CLI.",
+        };
+      if (outcome === "alreadyActive")
+        return {
+          outcome: "unchanged",
+          code: "alreadyActive",
+          message: "This account is already active. No switch was needed.",
         };
       if (outcome === "unchanged")
         return {

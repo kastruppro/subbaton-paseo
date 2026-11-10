@@ -187,3 +187,36 @@ test("L3 settings changes clear negative cache and forget old account authorizat
   await service.status();
   assert.equal(cli.calls.length, 2);
 });
+
+test("D1 alreadyActive exit zero is an unchanged named switch, not recovery", async () => {
+  const { cli, service } = setup();
+  await service.status();
+  cli.response = {
+    code: 0,
+    stdout: JSON.stringify({
+      schemaVersion: 1,
+      ok: true,
+      result: { outcome: "alreadyActive" },
+    }),
+  };
+  const result = await service.switch({
+    provider: "claude",
+    target: accountId,
+  });
+  assert.equal(result.outcome, "unchanged");
+  assert.equal(result.code, "alreadyActive");
+  assert.match(result.message, /already active/i);
+  assert.doesNotMatch(result.message, /recovery/i);
+});
+test("D3 read-only status timeout or abnormal exit never asks for switch recovery", async () => {
+  for (const code of [-2, 2]) {
+    const { cli, service } = setup();
+    cli.response = { code, stdout: "" };
+    const result = await service.status();
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.outcome, "error");
+    assert.doesNotMatch(result.error?.message ?? "", /recovery|uncertain/i);
+    await service.status();
+    assert.equal(cli.calls.length, 1);
+  }
+});

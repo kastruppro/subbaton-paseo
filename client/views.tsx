@@ -189,6 +189,9 @@ function Button({
       disabled={disabled}
       onPress={onPress}
       style={{
+        minHeight: 44,
+        minWidth: 44,
+        justifyContent: "center",
         paddingHorizontal: 10,
         paddingVertical: 9,
         borderWidth: 1,
@@ -288,7 +291,7 @@ export function AccountPopover(
           {query.data?.error?.message ?? "Status unavailable on this host."}
         </Text>
       )}
-      {!data && (
+      {!data && query.isPending && (
         <Text style={{ color: c.foregroundMuted }}>Loading cached status…</Text>
       )}
       {data?.providers.map((provider) => (

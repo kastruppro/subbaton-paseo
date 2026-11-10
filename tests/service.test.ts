@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SubBatonService, type CliExecutor } from "../server/service.js";
-import {status,setup,accountId} from "./fixtures.js";
+import { status, setup, accountId } from "./fixtures.js";
 test("status cache coalesces requests and expires without provider calls", async () => {
   const { cli, service, advance } = setup();
   await Promise.all([service.status(), service.status()]);
@@ -19,7 +19,17 @@ test("status cache coalesces requests and expires without provider calls", async
 test("named switches use argv only; Claude prefix is omitted and agy never stops/reopens", async () => {
   for (const provider of ["claude", "codex", "agy"] as const) {
     const { cli, service } = setup();
-    cli.response = {code:0,stdout:JSON.stringify({schemaVersion:1,ok:true,result:{...status,providers:[{...status.providers[0],provider}]}})};
+    cli.response = {
+      code: 0,
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        ok: true,
+        result: {
+          ...status,
+          providers: [{ ...status.providers[0], provider }],
+        },
+      }),
+    };
     await service.status();
     cli.response = {
       code: 0,
@@ -53,7 +63,10 @@ test("exit 2 is uncertain and never retried", async () => {
       result: { outcome: "uncertain" },
     }),
   };
-  const result = await service.strategy({provider:"claude",strategy:"best"});
+  const result = await service.strategy({
+    provider: "claude",
+    strategy: "best",
+  });
   assert.equal(result.outcome, "uncertain");
   assert.equal(cli.calls.length, 1);
   assert.ok(!JSON.stringify(result).includes("secret"));
@@ -95,7 +108,7 @@ test("a timed-out child is uncertain, not silently retried", async () => {
   const { cli, service } = setup();
   cli.response = { code: -2, stdout: "" };
   assert.equal(
-    (await service.strategy({provider:"claude",strategy:"best"})).outcome,
+    (await service.strategy({ provider: "claude", strategy: "best" })).outcome,
     "uncertain",
   );
   assert.equal(cli.calls.length, 1);

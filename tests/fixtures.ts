@@ -1,6 +1,6 @@
 import type { CliExecutor } from "../server/service.js";
 import { SubBatonService } from "../server/service.js";
-export const accountId="11111111-1111-4111-8111-111111111111";
+export const accountId = "11111111-1111-4111-8111-111111111111";
 export const status = {
   cacheOnly: true,
   generatedAt: 20,

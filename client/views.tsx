@@ -42,7 +42,7 @@ function Meter({
   warning?: number;
   danger?: number;
   offline?: boolean;
-  showBar?:boolean;
+  showBar?: boolean;
 }) {
   const old = window ? stale(window, offline) : true,
     value = window?.usedPercent ?? null;
@@ -57,25 +57,29 @@ function Meter({
             : theme.colors.accent;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-      {showBar&&<View
-        style={{
-          width: 24,
-          height: 4,
-          borderRadius: 2,
-          backgroundColor: theme.colors.border,
-        }}
-      >
+      {showBar && (
         <View
           style={{
-            width: `${value ?? 0}%`,
+            width: 24,
             height: 4,
             borderRadius: 2,
-            backgroundColor: color,
-            opacity: old ? 0.4 : 1,
+            backgroundColor: theme.colors.border,
           }}
-        />
-      </View>}
-      <Text numberOfLines={1} style={{ fontSize: 11, color,maxWidth:34 }}>{percentText(value, old)}</Text>
+        >
+          <View
+            style={{
+              width: `${value ?? 0}%`,
+              height: 4,
+              borderRadius: 2,
+              backgroundColor: color,
+              opacity: old ? 0.4 : 1,
+            }}
+          />
+        </View>
+      )}
+      <Text numberOfLines={1} style={{ fontSize: 11, color, maxWidth: 34 }}>
+        {percentText(value, old, window?.inferred)}
+      </Text>
     </View>
   );
 }
@@ -85,102 +89,135 @@ export function Footer({
 }: PluginSidebarItemProps & {
   Details: React.ComponentType<PluginPopoverProps>;
 }) {
-  const [width,setWidth]=useState(0);
+  const [width, setWidth] = useState(0);
   const query = useStatus(props.host.id),
     settings = useSettings(displaySettings);
   const data = query.data?.ok ? query.data.data : null;
   const items =
     settings.status === "ready" ? chooseItems(data, settings.values.items) : [];
-  const offline=query.isError||query.data?.ok===false;
-  const line=stripLayout(Math.max(0,width-56-(offline?70:0)),items.length);
+  const offline = query.isError || query.data?.ok === false;
+  const line = stripLayout(
+    Math.max(0, width - 56 - (offline ? 70 : 0)),
+    items.length,
+  );
   return (
-    <View style={{alignSelf:"stretch",minWidth:0}} onLayout={event=>setWidth(event.nativeEvent.layout.width)}><SidebarRow
-      icon="Gauge"
-      label=""
-      onPress={() => props.openPopover(Details)}
-      trailing={
-        <View
-          accessible
-          accessibilityLabel={
-            "SubBaton. " +
-            items
-              .map(
-                (item) =>
-                  `${providerLabel[item.provider]} ${windowTitle(item.windowId,item.window?.label)}: ${percentText(item.window?.usedPercent ?? null, item.window ? stale(item.window, query.isError) : true)}`,
-              )
-              .join(". ") +
-            ". Open account details."
-          }
-          style={{
-            flexDirection: "row",
-            flexWrap: "nowrap",
-            width:Math.max(0,width-56),
-            overflow:"hidden",
-            alignItems: "center",
-            gap: 8,
-            paddingVertical: 4,
-            flexShrink: 1,
-          }}
-        >
-          {settings.status !== "ready" ? (
-            <Text style={{ color: props.theme.colors.foregroundMuted }}>
-              SubBaton settings {settings.status}
-            </Text>
-          ) : items.length === 0 ? (
-            <Text style={{ color: props.theme.colors.foregroundMuted }}>
-              SubBaton · choose items in settings
-            </Text>
-          ) : (
-            items.slice(0,line.count).map((item) => (
-              <View
-                key={`${item.provider}:${item.windowId}`}
-                style={{ flexDirection: "row", alignItems: "center", gap: 3 }}
-                accessibilityLabel={`${providerLabel[item.provider]} ${line.labels?windowTitle(item.windowId,item.window?.label):shortWindowTitle(item.windowId,item.window?.label)} ${item.account?.health ?? "unknown"}`}
+    <View
+      style={{ alignSelf: "stretch", minWidth: 0 }}
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+    >
+      <SidebarRow
+        icon="Gauge"
+        label=""
+        onPress={() => props.openPopover(Details)}
+        trailing={
+          <View
+            accessible
+            accessibilityLabel={
+              "SubBaton. " +
+              items
+                .map(
+                  (item) =>
+                    `${providerLabel[item.provider]} ${windowTitle(item.windowId, item.window?.label)}: ${percentText(item.window?.usedPercent ?? null, item.window ? stale(item.window, query.isError) : true, item.window?.inferred)}`,
+                )
+                .join(". ") +
+              ". Open account details."
+            }
+            style={{
+              flexDirection: "row",
+              flexWrap: "nowrap",
+              width: Math.max(0, width - 56),
+              overflow: "hidden",
+              alignItems: "center",
+              gap: 8,
+              paddingVertical: 4,
+              flexShrink: 1,
+            }}
+          >
+            {settings.status !== "ready" ? (
+              <Text
+                numberOfLines={1}
+                style={{ color: props.theme.colors.foregroundMuted }}
               >
-                <Icon
-                  name={providerIcon[item.provider]}
-                  size={12}
-                  color={props.theme.colors.foregroundMuted}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={{
-                    fontSize: 10,
-                    color: props.theme.colors.foregroundMuted,
-                    maxWidth:line.labels?58:20,
-                  }}
+                SubBaton settings {settings.status}
+              </Text>
+            ) : items.length === 0 ? (
+              <Text
+                numberOfLines={1}
+                style={{ color: props.theme.colors.foregroundMuted }}
+              >
+                SubBaton · choose items in settings
+              </Text>
+            ) : (
+              items.slice(0, line.count).map((item) => (
+                <View
+                  key={`${item.provider}:${item.windowId}`}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 3 }}
+                  accessibilityLabel={`${providerLabel[item.provider]} ${windowTitle(item.windowId, item.window?.label)} ${item.account?.health ?? "unknown"}`}
                 >
-                  {windowTitle(item.windowId, item.window?.label)}
-                </Text>
-                <Meter
-                  theme={props.theme}
-                  window={item.window}
-                  showBar={line.meters}
-                  warning={
-                    settings.status === "ready" ? settings.values.warning : 75
-                  }
-                  danger={
-                    settings.status === "ready" ? settings.values.danger : 90
-                  }
-                  offline={query.isError || query.data?.ok === false}
-                />
-                {item.account?.health !== "ok" && item.account && (
-                  <Text style={{ color: props.theme.colors.statusWarning }}>
-                    !
+                  <Icon
+                    name={providerIcon[item.provider]}
+                    size={12}
+                    color={props.theme.colors.foregroundMuted}
+                  />
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      fontSize: 10,
+                      color: props.theme.colors.foregroundMuted,
+                      maxWidth: line.labels ? 58 : 20,
+                    }}
+                  >
+                    {line.labels
+                      ? windowTitle(item.windowId, item.window?.label)
+                      : shortWindowTitle(item.windowId, item.window?.label)}
                   </Text>
-                )}
-              </View>
-            ))
-          )}
-          {line.hidden>0&&<Text numberOfLines={1} style={{color:props.theme.colors.foregroundMuted,fontSize:10,maxWidth:24}}>+{line.hidden}</Text>}
-          {(query.isError || query.data?.ok === false) && (
-            <Text style={{ color: props.theme.colors.statusWarning }}>
-              unavailable
-            </Text>
-          )}
-        </View>
-      }
-    /></View>
+                  <Meter
+                    theme={props.theme}
+                    window={item.window}
+                    showBar={line.meters}
+                    warning={
+                      settings.status === "ready" ? settings.values.warning : 75
+                    }
+                    danger={
+                      settings.status === "ready" ? settings.values.danger : 90
+                    }
+                    offline={query.isError || query.data?.ok === false}
+                  />
+                  {item.account?.health !== "ok" && item.account && (
+                    <Text
+                      numberOfLines={1}
+                      style={{ color: props.theme.colors.statusWarning }}
+                    >
+                      !
+                    </Text>
+                  )}
+                </View>
+              ))
+            )}
+            {line.hidden > 0 && (
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: props.theme.colors.foregroundMuted,
+                  fontSize: 10,
+                  maxWidth: 24,
+                }}
+              >
+                +{line.hidden}
+              </Text>
+            )}
+            {(query.isError || query.data?.ok === false) && (
+              <Text
+                numberOfLines={1}
+                style={{ color: props.theme.colors.statusWarning }}
+              >
+                unavailable
+              </Text>
+            )}
+          </View>
+        }
+      />
+    </View>
   );
 }
 function Button({
@@ -277,7 +314,12 @@ export function AccountPopover(
           theme={props.theme}
           disabled={busy}
           onPress={() =>
-            void act(async () => (await refresh({})).map((v) => ({...v.result,message:`${v.provider?providerLabel[v.provider]:"SubBaton"}: ${v.result.message}`})))
+            void act(async () =>
+              (await refresh({})).map((v) => ({
+                ...v.result,
+                message: `${v.provider ? providerLabel[v.provider] : "SubBaton"}: ${v.result.message}`,
+              })),
+            )
           }
         />
         <Button
@@ -317,7 +359,9 @@ export function AccountPopover(
           </Text>
           {provider.cacheStatus !== "available" && (
             <Text style={{ color: c.statusWarning }}>
-              {provider.provider==="unknown" ? "A newer CLI provider is not supported by this plugin yet." : "Run this provider's list command once with the signed CLI to populate its snapshot."}
+              {provider.provider === "unknown"
+                ? "A newer CLI provider is not supported by this plugin yet."
+                : "Run this provider's list command once with the signed CLI to populate its snapshot."}
             </Text>
           )}
           {provider.cacheStatus === "available" &&
@@ -406,7 +450,7 @@ export function AccountPopover(
                   </Text>
                 </View>
               ))}
-              {provider.provider!=="unknown" && !account.active && (
+              {provider.provider !== "unknown" && !account.active && (
                 <Button
                   label={`Switch to ${account.alias}`}
                   theme={props.theme}
@@ -418,8 +462,14 @@ export function AccountPopover(
                     )
                   }
                   onPress={() => {
-                    const selectedProvider=provider.provider;
-                    if(selectedProvider!=="unknown")void act(()=>switchAccount({provider:selectedProvider,target:account.id}));
+                    const selectedProvider = provider.provider;
+                    if (selectedProvider !== "unknown")
+                      void act(() =>
+                        switchAccount({
+                          provider: selectedProvider,
+                          target: account.id,
+                        }),
+                      );
                   }}
                 />
               )}
@@ -453,7 +503,9 @@ export function AccountPopover(
             </View>
           ) : (
             <Text style={{ color: c.foregroundMuted, fontSize: 11 }}>
-              {provider.provider==="unknown" ? "Actions for unknown providers are disabled." : "Quota strategies are currently available for Claude. Named switching is available here."}
+              {provider.provider === "unknown"
+                ? "Actions for unknown providers are disabled."
+                : "Quota strategies are currently available for Claude. Named switching is available here."}
             </Text>
           )}
         </View>

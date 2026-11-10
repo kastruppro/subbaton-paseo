@@ -22,12 +22,12 @@ function BinaryForm({
   busy,
 }: {
   initial: string;
-  initialAllowPath:boolean;
-  save: (value: string,allowPath:boolean) => Promise<boolean>;
+  initialAllowPath: boolean;
+  save: (value: string, allowPath: boolean) => Promise<boolean>;
   busy: boolean;
 }) {
   const [path, setPath] = useState(initial);
-  const [allowPath,setAllowPath]=useState(initialAllowPath);
+  const [allowPath, setAllowPath] = useState(initialAllowPath);
   return (
     <SettingsCard>
       <SettingsInput
@@ -36,12 +36,18 @@ function BinaryForm({
         initialValue={initial}
         onChangeText={setPath}
       />
-      <SettingsSwitch label="Allow verified PATH lookup" hint="Off by default. PATH candidates must pass the same ownership, directory and Developer ID checks." value={allowPath} onValueChange={setAllowPath} disabled={busy}/>
+      <SettingsSwitch
+        label="Allow verified PATH lookup"
+        hint="Off by default. PATH candidates must pass the same ownership, directory and Developer ID checks."
+        value={allowPath}
+        onValueChange={setAllowPath}
+        disabled={busy}
+      />
       <SettingsAction
         label="Binary path"
         actionLabel="Save"
         disabled={busy || !path.trim()}
-        onPress={() => void save(path.trim(),allowPath)}
+        onPress={() => void save(path.trim(), allowPath)}
       />
     </SettingsCard>
   );
@@ -101,11 +107,12 @@ export function SettingsScreen(props: PluginSurfaceProps) {
   const labels = new Map<string, string>();
   if (query.data?.ok)
     for (const p of query.data.data?.providers ?? [])
-      if(p.provider!=="unknown")for (const a of p.accounts)
-        for (const w of a.windows) {
-          options.push({ provider: p.provider, windowId: w.id });
-          labels.set(`${p.provider}:${w.id}`, w.label);
-        }
+      if (p.provider !== "unknown")
+        for (const a of p.accounts)
+          for (const w of a.windows) {
+            options.push({ provider: p.provider, windowId: w.id });
+            labels.set(`${p.provider}:${w.id}`, w.label);
+          }
   if (display.status === "ready") options.push(...display.values.items);
   const unique = Array.from(
     new Map(options.map((v) => [`${v.provider}:${v.windowId}`, v])).values(),
@@ -123,7 +130,12 @@ export function SettingsScreen(props: PluginSurfaceProps) {
             initial={binary.values.binaryPath}
             initialAllowPath={binary.values.allowPathLookup}
             busy={binary.saving}
-            save={(path,allowPathLookup) => binary.save({ binaryPath: path,allowPathLookup }, binary.revision)}
+            save={(path, allowPathLookup) =>
+              binary.save(
+                { binaryPath: path, allowPathLookup },
+                binary.revision,
+              )
+            }
           />
         ) : (
           <Text style={{ color: c.statusWarning }}>

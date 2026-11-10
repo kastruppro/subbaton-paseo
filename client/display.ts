@@ -5,20 +5,26 @@ import type {
   Window,
   Account,
 } from "../shared/contracts.js";
-export const providerLabel: Record<Provider|"unknown", string> = {
+export const providerLabel: Record<Provider | "unknown", string> = {
   claude: "Claude",
   codex: "Codex",
   agy: "agy",
-  unknown:"Unknown provider",
+  unknown: "Unknown provider",
 };
-export const providerIcon: Record<Provider|"unknown", string> = {
+export const providerIcon: Record<Provider | "unknown", string> = {
   claude: "Bot",
   codex: "Terminal",
   agy: "Sparkles",
-  unknown:"HelpCircle",
+  unknown: "HelpCircle",
 };
-export function percentText(value: number | null, stale: boolean) {
-  return value === null ? "—" : `${stale ? "~" : ""}${Math.round(value)}%`;
+export function percentText(
+  value: number | null,
+  stale: boolean,
+  inferred = false,
+) {
+  return value === null
+    ? "—"
+    : `${stale ? "~" : ""}${inferred ? "≈" : ""}${Math.round(value)}%`;
 }
 export function severity(
   value: number | null,
@@ -84,18 +90,36 @@ export function windowTitle(id: string, label?: string) {
   );
 }
 
-export function stripLayout(width:number,count:number){
-  const available=Math.max(0,Number.isFinite(width)?width:0),total=Math.max(0,Math.min(24,Math.floor(count)));
-  for(const [unit,labels,meters]of [[160,true,true],[120,false,true],[96,false,false]] as const){
-    if(total*unit<=available)return {count:total,hidden:0,labels,meters,usedWidth:total*unit};
+export function stripLayout(width: number, count: number) {
+  const available = Math.max(0, Number.isFinite(width) ? width : 0),
+    total = Math.max(0, Math.min(24, Math.floor(count)));
+  for (const [unit, labels, meters] of [
+    [160, true, true],
+    [120, false, true],
+    [96, false, false],
+  ] as const) {
+    if (total * unit <= available)
+      return {
+        count: total,
+        hidden: 0,
+        labels,
+        meters,
+        usedWidth: total * unit,
+      };
   }
-  const shown=Math.min(total,Math.max(0,Math.floor((available-24)/96)));
-  return {count:shown,hidden:total-shown,labels:false,meters:false,usedWidth:Math.min(available,shown*96+24)};
+  const shown = Math.min(total, Math.max(0, Math.floor((available - 24) / 96)));
+  return {
+    count: shown,
+    hidden: total - shown,
+    labels: false,
+    meters: false,
+    usedWidth: Math.min(available, shown * 96 + 24),
+  };
 }
-export function shortWindowTitle(id:string,label?:string){
-  if(id==='five_hour'||label==='5-hour limit')return '5h';
-  if(id==='seven_day'||label==='Weekly limit')return '7d';
-  if(id==='codex:primary_window')return 'P';
-  if(id==='codex:secondary_window')return 'S';
-  return windowTitle(id,label).slice(0,4);
+export function shortWindowTitle(id: string, label?: string) {
+  if (id === "five_hour" || label === "5-hour limit") return "5h";
+  if (id === "seven_day" || label === "Weekly limit") return "7d";
+  if (id === "codex:primary_window") return "P";
+  if (id === "codex:secondary_window") return "S";
+  return windowTitle(id, label).slice(0, 4);
 }

@@ -2,16 +2,16 @@
 
 Use Paseo **0.15.3 or newer** on both daemon and client, and the signed SubBaton phase-1b CLI. The plugin is trusted, unsandboxed code; install only on the intended daemon. Development did not install it or change the running daemon.
 
-1. Verify the signed CLI and copy it to the default shared location, or set its absolute path later under the plugin's settings:
+1. Verify the signed CLI and copy it to the default shared location, or set its absolute path later under the plugin's settings. Inspect any pre-existing /Users/Shared/subbaton directory first: it must belong to root or your current user and must not be group/world-writable. Do not reuse a folder planted by another local user; have the owner repair/remove it through normal administrative controls. The plugin refuses untrusted custody before executing anything:
 
 ```sh
 /usr/bin/codesign --verify --strict --verbose=2 /path/to/subbaton-app/build/subbaton
-mkdir -p /Users/Shared/subbaton
+install -d -m 755 /Users/Shared/subbaton
 install -m 755 /path/to/subbaton-app/build/subbaton /Users/Shared/subbaton/subbaton
 /usr/bin/codesign --verify --strict --verbose=2 /Users/Shared/subbaton/subbaton
 ```
 
-Expected identifier dk.kastruppro.subbaton, Team 5W98EXLE44, hardened runtime and secure timestamp. Do not re-sign ad hoc. The default shared path falls back to `subbaton` on the daemon's PATH only if unavailable; a custom path never silently falls back.
+Expected identifier dk.kastruppro.subbaton, Team 5W98EXLE44, hardened runtime and secure timestamp. Do not re-sign ad hoc. PATH lookup is **off by default**. Enable “Allow verified PATH lookup” explicitly in the host settings before using `subbaton` on PATH or permitting fallback from a missing default. A missing custom absolute path never falls back. Every actual execution verifies the canonical file and all parents: root/current-user ownership, no group/world write, plus Developer ID/team/identifier through codesign. Root-owned sticky /Users/Shared is the only writable ancestor exception and cannot be the direct parent.
 
 2. As the account whose subscriptions you intend to manage, bootstrap safe snapshots once. These list commands use the signed CLI's vault; the plugin itself never reads credentials:
 
@@ -51,8 +51,10 @@ paseo plugin ls
 
 Do not disable providers themselves. Stop other subscription usage monitors too. The SubBaton footer reads cache only; it does not replace the future poll owner. Until phase 4, explicitly press Refresh now or use CLI usage commands for new quota. CLI request floors/backoff still apply.
 
-5. Open **Settings → Plugins → SubBaton**. Save the binary path if different, choose always-visible active-account windows and warning/danger thresholds. Settings are host-scoped in SDK 0.15.3, shared across authorized clients. Extra agy/model windows become selectable after a verified CLI usage reading. In **Settings → Sidebar**, show/reorder SubBaton usage if needed.
+5. Open **Settings → Plugins → SubBaton**. Save the binary path if different; leave verified PATH lookup disabled unless you intend to use it. Choose always-visible active-account windows and warning/danger thresholds. Settings are host-scoped in SDK 0.15.3, shared across authorized clients. The one-line strip drops detail then shows +N on narrow layouts; all pins remain in the popover. Extra agy/model windows become selectable after a verified CLI usage reading. In **Settings → Sidebar**, show/reorder SubBaton usage if needed.
 
-Tap the footer for all cached accounts, reset/login-expiry dates and manual actions. Best/next-available currently apply to Claude only; named switches cover all providers. Finish agy sessions before switching; v1 never sends stop/force/restart flags or reopens agents. Exit-2/timeouts show uncertainty and require state/recovery inspection, not repeated clicks.
+Tap the footer for all cached accounts, reset/login-expiry dates and manual actions. Best/next-available currently apply to Claude only; named switches cover all providers. Finish agy sessions before switching; v1 never sends stop/force/restart flags or reopens agents. Every abnormal mutation result (kill/crash/overflow/partial output/inconsistent envelope/exit 2) shows uncertainty and require state/recovery inspection, not repeated clicks.
 
-After source updates, rerun typecheck/tests/build and use `paseo plugin reload subbaton`; check ls/logs. Do not restart the daemon. Disable/remove with `paseo plugin disable subbaton` / `paseo plugin remove subbaton`; local source is retained. See live-tests-plugin.md before daily use. A later coordinated handoff must use **agent.reload()**; agent.refresh() only reads state.
+Named switch RPCs accept only known account UUIDs from the last status. Strategies have separate explicit actions. Unknown additive health/providers show unknown without hiding supported accounts. Failed status/configuration checks back off for 15 seconds; saving settings clears that backoff. Global refresh errors are not assigned to a provider. Inferred reset quota has an ≈ marker even when labels shrink.
+
+Avoid reload/stop during an action. Teardown does not deliberately cancel a transaction child; transport loss still requires state/recovery inspection. After source updates, rerun typecheck/tests/build and use `paseo plugin reload subbaton`; check ls/logs. Do not restart the daemon. Disable/remove with `paseo plugin disable subbaton` / `paseo plugin remove subbaton`; local source is retained. See live-tests-plugin.md before daily use. A later coordinated handoff must use **agent.reload()**; agent.refresh() only reads state.

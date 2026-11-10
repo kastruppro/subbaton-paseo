@@ -12,3 +12,6 @@ npm run build
 ```
 
 Tests use a fake CLI. Build checks separate browser-safe client and Node server bundles; Paseo loads the TypeScript entries. No provider HTTP client, credential storage, telemetry or agent reload is implemented here. Future coordinated handoff must call agent.reload(); agent.refresh() is read-only.
+
+
+Before every actual CLI run the plugin checks canonical ownership/permissions of the binary and all parents, then its Developer ID/team/identifier. PATH lookup is explicit opt-in, off by default. Abnormal mutations require recovery inspection; status/configuration failures have a short negative cache. Named switches accept known UUIDs only. Unknown schema additions remain visible as unknown/read-only. The footer stays on one measured line; SDK 0.15.3 still requires host-scoped preferences.

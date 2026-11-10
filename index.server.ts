@@ -16,12 +16,17 @@ export default function contribute(server: PluginServerContext) {
   const service = new SubBatonService(nativeCLI, async () => {
     const current = await settings.read();
     if (current.status !== "ready") throw new Error("Settings unavailable");
-    return resolveBinary(current.values.binaryPath,current.values.allowPathLookup);
+    return resolveBinary(
+      current.values.binaryPath,
+      current.values.allowPathLookup,
+    );
   });
-  const unsubscribe=settings.subscribe(()=>service.configurationChanged());
+  const unsubscribe = settings.subscribe(() => service.configurationChanged());
   server.handle(statusRpc, () => service.status());
   server.handle(switchRpc, (input) => service.switch(input));
   server.handle(strategyRpc, (input) => service.strategy(input));
   server.handle(refreshRpc, () => service.refresh());
-  return () => {unsubscribe();};
+  return () => {
+    unsubscribe();
+  };
 }

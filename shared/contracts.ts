@@ -10,6 +10,7 @@ export const windowSchema = z.object({
   usedPercent: z.number().min(0).max(100).nullable(),
   resetsAt: time,
   stale: z.boolean(),
+  inferred: z.boolean().optional().default(false),
   fetchedAt: time,
 });
 export const accountSchema = z.object({
@@ -18,22 +19,62 @@ export const accountSchema = z.object({
   email: text.nullable(),
   active: z.boolean(),
   enabled: z.boolean(),
-  health:z.string().max(128).transform(v=>["ok","needsLogin","attention","deviceBlocked","quarantined"].includes(v)?v:"unknown"),
+  health: z
+    .string()
+    .max(128)
+    .transform((v) =>
+      [
+        "ok",
+        "needsLogin",
+        "attention",
+        "deviceBlocked",
+        "quarantined",
+      ].includes(v)
+        ? v
+        : "unknown",
+    ),
   plan: text.nullable(),
   loginExpiresAt: time,
   usageStatus: text,
   windows: z.array(windowSchema).max(256),
 });
-const providerStatusSchema=z.preprocess(value=>{
-  if(value&&typeof value==="object"&&"provider"in value&&typeof value.provider==="string"&&!providerSchema.safeParse(value.provider).success)return {provider:"unknown",cacheStatus:"unknown",accounts:[]};
-  return value;
-},z.object({
-  provider:z.enum(["claude","codex","agy","unknown"]),
-  cacheStatus:z.string().max(128).transform(v=>["available","missing","unavailable"].includes(v)?v:"unknown"),
-  updatedAt:z.number().finite().optional(),
-  accounts:z.array(accountSchema).max(256),
-}));
-export const statusSchema=z.object({cacheOnly:z.literal(true),generatedAt:z.number().finite(),providers:z.array(providerStatusSchema).max(32).transform(rows=>rows.filter((row,index)=>rows.findIndex(other=>other.provider===row.provider)===index))});
+const providerStatusSchema = z.preprocess(
+  (value) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      "provider" in value &&
+      typeof value.provider === "string" &&
+      !providerSchema.safeParse(value.provider).success
+    )
+      return { provider: "unknown", cacheStatus: "unknown", accounts: [] };
+    return value;
+  },
+  z.object({
+    provider: z.enum(["claude", "codex", "agy", "unknown"]),
+    cacheStatus: z
+      .string()
+      .max(128)
+      .transform((v) =>
+        ["available", "missing", "unavailable"].includes(v) ? v : "unknown",
+      ),
+    updatedAt: z.number().finite().optional(),
+    accounts: z.array(accountSchema).max(256),
+  }),
+);
+export const statusSchema = z.object({
+  cacheOnly: z.literal(true),
+  generatedAt: z.number().finite(),
+  providers: z
+    .array(providerStatusSchema)
+    .max(32)
+    .transform((rows) =>
+      rows.filter(
+        (row, index) =>
+          rows.findIndex((other) => other.provider === row.provider) === index,
+      ),
+    ),
+});
 export type Status = z.infer<typeof statusSchema>;
 export type Account = z.infer<typeof accountSchema>;
 export type Window = z.infer<typeof windowSchema>;
@@ -48,7 +89,7 @@ export const statusResultSchema = z.object({
   data: statusSchema.nullable(),
   error: actionSchema.nullable(),
 });
-export type StatusResult=z.infer<typeof statusResultSchema>;
+export type StatusResult = z.infer<typeof statusResultSchema>;
 export const statusRpc = defineRpc({
   name: "status",
   input: z.object({}),
@@ -56,7 +97,7 @@ export const statusRpc = defineRpc({
 });
 export const switchInput = z.object({
   provider: providerSchema,
-  target:z.uuid(),
+  target: z.uuid(),
 });
 export const switchRpc = defineRpc({
   name: "switch",
@@ -76,7 +117,9 @@ export const refreshRpc = defineRpc({
   name: "refresh",
   input: z.object({}),
   output: z
-    .array(z.object({ provider: providerSchema.nullable(), result: actionSchema }))
+    .array(
+      z.object({ provider: providerSchema.nullable(), result: actionSchema }),
+    )
     .max(3),
 });
 export const hostSettings = defineSettings({
@@ -84,7 +127,7 @@ export const hostSettings = defineSettings({
   scope: "host",
   version: 1,
   schema: z.object({
-    allowPathLookup:z.boolean().default(false),
+    allowPathLookup: z.boolean().default(false),
     binaryPath: z
       .string()
       .min(1)

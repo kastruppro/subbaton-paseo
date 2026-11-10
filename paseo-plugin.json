@@ -1,0 +1,6 @@
+{
+  "id": "subbaton",
+  "name": "SubBaton",
+  "description": "Subscription account usage and manual switching through the local SubBaton CLI.",
+  "requirements": { "paseo": ">=0.15.3" }
+}

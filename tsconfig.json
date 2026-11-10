@@ -1,1 +1,16 @@
-{"compilerOptions":{"target":"ES2022","lib":["ES2023","DOM"],"module":"ESNext","moduleResolution":"Bundler","strict":true,"noEmit":true,"jsx":"react-jsx","esModuleInterop":true,"skipLibCheck":true,"types":["node","react"]},"include":["**/*.ts","**/*.tsx"],"exclude":["node_modules","build"]}
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node", "react"]
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules", "build"]
+}

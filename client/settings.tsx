@@ -13,7 +13,7 @@ import {
   hostSettings,
   type DisplaySettings,
 } from "../shared/contracts.js";
-import { providerLabel } from "./display.js";
+import { providerLabel, windowTitle } from "./display.js";
 import { useStatus } from "./use-status.js";
 function BinaryForm({
   initial,
@@ -142,7 +142,7 @@ export function SettingsScreen(props: PluginSurfaceProps) {
               return (
                 <SettingsSwitch
                   key={`${item.provider}:${item.windowId}`}
-                  label={`${providerLabel[item.provider]} · ${labels.get(`${item.provider}:${item.windowId}`) ?? item.windowId.replace("codex:", "")}`}
+                  label={`${providerLabel[item.provider]} · ${labels.get(`${item.provider}:${item.windowId}`) ?? windowTitle(item.windowId)}`}
                   value={checked}
                   disabled={display.saving}
                   onValueChange={(value) =>

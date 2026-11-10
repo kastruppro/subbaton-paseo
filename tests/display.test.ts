@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chooseItems, severity, percentText } from "../client/display.js";
+import {
+  chooseItems,
+  severity,
+  percentText,
+  windowTitle,
+} from "../client/display.js";
 test("missing and stale quota is never shown as a fresh zero", () => {
   assert.equal(percentText(null, false), "—");
   assert.equal(percentText(25, true), "~25%");
@@ -13,4 +18,10 @@ test("pinned items follow active accounts and include unavailable selections", (
   ]);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.window, null);
+});
+
+test("unknown readings keep friendly labels instead of schema keys", () => {
+  assert.equal(windowTitle("five_hour"), "5-hour limit");
+  assert.equal(windowTitle("weekly_scoped:Fable"), "Fable");
+  assert.equal(windowTitle("codex:primary_window"), "Primary window");
 });

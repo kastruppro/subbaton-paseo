@@ -24,6 +24,7 @@ import {
   severity,
   stale,
   timestamp,
+  windowTitle,
 } from "./display.js";
 import { useStatus } from "./use-status.js";
 function Meter({
@@ -98,7 +99,7 @@ export function Footer({
             items
               .map(
                 (item) =>
-                  `${providerLabel[item.provider]} ${item.window?.label ?? item.windowId}: ${percentText(item.window?.usedPercent ?? null, item.window ? stale(item.window, query.isError) : true)}`,
+                  `${providerLabel[item.provider]} ${windowTitle(item.windowId, item.window?.label)}: ${percentText(item.window?.usedPercent ?? null, item.window ? stale(item.window, query.isError) : true)}`,
               )
               .join(". ") +
             ". Open account details."
@@ -125,7 +126,7 @@ export function Footer({
               <View
                 key={`${item.provider}:${item.windowId}`}
                 style={{ flexDirection: "row", alignItems: "center", gap: 3 }}
-                accessibilityLabel={`${providerLabel[item.provider]} ${item.window?.label ?? item.windowId} ${item.account?.health ?? "unknown"}`}
+                accessibilityLabel={`${providerLabel[item.provider]} ${windowTitle(item.windowId, item.window?.label)} ${item.account?.health ?? "unknown"}`}
               >
                 <Icon
                   name={providerIcon[item.provider]}
@@ -140,7 +141,7 @@ export function Footer({
                     maxWidth: 58,
                   }}
                 >
-                  {item.window?.label ?? item.windowId.replace("codex:", "")}
+                  {windowTitle(item.windowId, item.window?.label)}
                 </Text>
                 <Meter
                   theme={props.theme}

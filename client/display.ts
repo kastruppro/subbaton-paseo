@@ -65,3 +65,19 @@ export function stale(window: Window, offline = false) {
     (window.resetsAt !== null && window.resetsAt <= Date.now() / 1000)
   );
 }
+
+export function windowTitle(id: string, label?: string) {
+  if (label) return label;
+  const known: Record<string, string> = {
+    five_hour: "5-hour limit",
+    seven_day: "Weekly limit",
+    seven_day_opus: "Opus",
+    seven_day_sonnet: "Sonnet",
+    "codex:primary_window": "Primary window",
+    "codex:secondary_window": "Secondary window",
+  };
+  return (
+    known[id] ??
+    (id.startsWith("weekly_scoped:") ? id.slice(14) : "Saved quota window")
+  );
+}

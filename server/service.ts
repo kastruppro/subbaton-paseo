@@ -108,6 +108,8 @@ export class SubBatonService {
           ),
         } as const;
       const value = parsed.data;
+      if (mutation && ["uncertain", "usageRecoveryUncertain", "lockLost"].includes(value.error?.code ?? ""))
+        return { error: uncertain() } as const;
       if (result.code === 1 && !value.ok) {
         const code = value.error?.code ?? "";
         return {

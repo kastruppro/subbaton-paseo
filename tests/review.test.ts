@@ -220,3 +220,11 @@ test("D3 read-only status timeout or abnormal exit never asks for switch recover
     assert.equal(cli.calls.length, 1);
   }
 });
+test("explicit uncertainty survives a legacy exit-one envelope", async () => {
+  for (const code of ["uncertain", "usageRecoveryUncertain", "lockLost"]) {
+    const service = new SubBatonService({ async run() { return { code: 1, stdout: JSON.stringify({schemaVersion:1,ok:false,error:{code}}) }; } }, async () => "/fixture/subbaton");
+    const result = await service.strategy({provider:"claude",strategy:"best"});
+    assert.equal(result.outcome,"uncertain");
+    assert.match(result.message,/recovery/i);
+  }
+});

@@ -228,3 +228,14 @@ test("explicit uncertainty survives a legacy exit-one envelope", async () => {
     assert.match(result.message,/recovery/i);
   }
 });
+test("F1 uncertain recovery retains an allowlisted actionable cause", async () => {
+  for (const code of [1,2]) {
+    const service = new SubBatonService({async run() {return {code,stdout:JSON.stringify({schemaVersion:1,ok:false,error:{code:"uncertain",cause:"processesRunning",causeMessage:"NEVER DISPLAY RAW CONTENT"}})};}},async()=>"/fixture/subbaton");
+    const result = await service.strategy({provider:"claude",strategy:"best"});
+    assert.equal(result.outcome,"uncertain");
+    assert.equal(result.cause,"processesRunning");
+    assert.match(result.message,/agy is running/i);
+    assert.match(result.message,/recovery/i);
+    assert.doesNotMatch(result.message,/NEVER DISPLAY/);
+  }
+});

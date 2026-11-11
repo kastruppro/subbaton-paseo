@@ -20,7 +20,7 @@ const envelope = z.object({
   schemaVersion: z.literal(1),
   ok: z.boolean(),
   result: z.unknown().optional(),
-  error: z.object({ code: z.string() }).optional(),
+  error: z.object({ code: z.string(), cause: z.string().optional() }).optional(),
 });
 const failure = (code: string, message: string): ActionResult => ({
   outcome: "error",
@@ -29,6 +29,9 @@ const failure = (code: string, message: string): ActionResult => ({
 });
 const messages: Record<string, string> = {
   busy: "SubBaton is busy; retry later.",
+  stopFailed: "Some agy sessions did not stop safely. Inspect holders before retrying recovery.",
+  ambiguousStores: "Native stores disagree. Inspect the retained copies with the CLI.",
+  identityHintMismatch: "The selected recovery identity does not match. Confirm its owner with the CLI.",
   processesRunning: "agy is running. Finish those sessions before switching.",
   needsLogin: "This account needs an official login or must be enabled.",
   recoveryRequired: "Recovery is pending. Resolve it with the CLI first.",
@@ -55,10 +58,11 @@ export class SubBatonService {
     this.pending = null;
   }
   private async call(argv: string[], timeout = 120000, mutation = false) {
-    const uncertain = (): ActionResult => ({
+    const uncertain = (cause?: string): ActionResult => ({
       outcome: "uncertain",
       code: "uncertain",
-      message:
+      ...(cause && messages[cause] ? { cause } : {}),
+      message: (cause && messages[cause] ? messages[cause] + " " : "") +
         "Result uncertain. Run recovery with the SubBaton CLI and inspect current state before retrying. Agents were not reopened.",
     });
     const abnormal = (code: string, message: string) =>
@@ -85,7 +89,7 @@ export class SubBatonService {
             "SubBaton did not start. Check the verified binary path and executable permissions.",
           ),
         } as const;
-      if (result.code === 2 || result.code === -2)
+      if (result.code === -2 || result.code === 2 && !mutation)
         return {
           error: abnormal(
             "statusUnavailable",
@@ -108,8 +112,8 @@ export class SubBatonService {
           ),
         } as const;
       const value = parsed.data;
-      if (mutation && ["uncertain", "usageRecoveryUncertain", "lockLost"].includes(value.error?.code ?? ""))
-        return { error: uncertain() } as const;
+      if (mutation && (result.code === 2 || ["uncertain", "usageRecoveryUncertain", "lockLost"].includes(value.error?.code ?? "")))
+        return { error: uncertain(value.error?.cause ?? value.error?.code) } as const;
       if (result.code === 1 && !value.ok) {
         const code = value.error?.code ?? "";
         return {

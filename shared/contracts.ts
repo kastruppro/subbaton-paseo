@@ -83,6 +83,7 @@ export const actionSchema = z.object({
   outcome: z.enum(["success", "unchanged", "uncertain", "error"]),
   code: text,
   message: text,
+  cause: text.optional(),
 });
 export type ActionResult = z.infer<typeof actionSchema>;
 export const statusResultSchema = z.object({

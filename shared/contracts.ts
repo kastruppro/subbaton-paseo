@@ -1,5 +1,6 @@
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
+import { defaultBinary } from "./defaults.js";
 export const providerSchema = z.enum(["claude", "codex", "agy"]);
 export type Provider = z.infer<typeof providerSchema>;
 const text = z.string().max(512);
@@ -132,7 +133,7 @@ export const hostSettings = defineSettings({
       .string()
       .min(1)
       .max(4096)
-      .default("/Users/Shared/subbaton/subbaton"),
+      .default(defaultBinary),
   }),
 });
 export const displaySchema = z

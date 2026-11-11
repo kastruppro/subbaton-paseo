@@ -3,7 +3,8 @@ import { constants } from "node:fs";
 import { dirname, isAbsolute, delimiter, normalize } from "node:path";
 import { nativeCLI } from "./exec.js";
 import type { CliExecutor } from "./service.js";
-export const defaultBinary = "/Users/Shared/subbaton/subbaton";
+import { defaultBinary } from "../shared/defaults.js";
+export { defaultBinary } from "../shared/defaults.js";
 export const codeRequirement =
   '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "5W98EXLE44" and identifier "dk.kastruppro.subbaton"';
 export interface BinarySystem {

@@ -30,7 +30,7 @@ class FakeAgents {
 // The process tree used in these tests: 500 is the Paseo daemon ("Paseo Helper"), whose parent 400
 // is a login shell; 900 is a terminal shell; 700 a shell the daemon started.
 const paseoPid = 500;
-const names: Record<number, string> = { 500: "Paseo Helper", 400: "zsh", 900: "zsh", 700: "sh", 1: "launchd" };
+const names: Record<number, string> = { 500: "Paseo Helper", 400: "zsh", 900: "zsh", 700: "sh", 600: "node", 1: "launchd" };
 const proc = (pid: number, ancestors: number[] | null = [paseoPid, 400, 1], kind = "cli", complete = ancestors !== null): AgyProcessInfo => ({
   pid,
   kind,
@@ -123,7 +123,7 @@ const setup = (settings: Partial<HandoffSettings> = {}, initial: unknown = null,
 test("agy: waits for idle, stops only via the CLI, switches, then reloads only the affected agy agents", async () => {
   const { cli, agents, coordinator } = setup();
   agents.agents = [agent("a1", "antigravity"), agent("a2", "antigravity", "running", true), agent("c1", "codex"), agent("k1", "claude", "running", true)];
-  cli.processes = [proc(12), proc(11, [700, paseoPid, 400, 1])];
+  cli.processes = [proc(12), proc(11, [600, paseoPid, 400, 1])];
   assert.equal((await coordinator.request("agy", target)).result.outcome, "success");
   await coordinator.tick(agents);
   assert.equal(coordinator.status().handoffs.agy?.phase, "waiting");
@@ -505,7 +505,7 @@ test("agy: an incomplete ancestor chain without the Paseo PID is unattributable;
   await coordinator.tick(agents);
   assert.equal(coordinator.status().handoffs.agy?.code, "attributionUnknown");
   agents.agents = [agent("a1", "antigravity"), agent("a2", "antigravity")];
-  cli.processes = [proc(11), proc(12, [900, paseoPid, 1], "cli", false)];
+  cli.processes = [proc(11), proc(12, [600, paseoPid, 1], "cli", false)];
   cli.outcome = { kind: "notAllowed", code: "processesNotAllowed", message: "x" };
   await coordinator.tick(agents);
   assert.deepEqual(cli.switches.at(-1)?.options, { onlyPids: [11, 12] });
@@ -674,6 +674,29 @@ test("RH2: more Paseo agy processes than idle Paseo agy agents waits", async () 
   assert.equal(h.phase, "waiting");
   assert.equal(h.code, "extraPaseoProcesses");
   assert.match(h.message, /2 Paseo agy processes/);
+  assert.equal(cli.switches.length, 0);
+});
+
+test("RH3: agy started in a Paseo terminal pane (a shell between it and the daemon) is never Paseo's", async () => {
+  for (const shell of ["zsh", "-zsh", "bash", "sh", "fish", "tmux", "login", "screen", "zellij", "Terminal", "iTerm2", "ghostty"]) {
+    const { cli, agents, coordinator } = setup();
+    // One idle Paseo agent without a live process; the terminal session would fill its slot by count.
+    agents.agents = [agent("a1", "antigravity")];
+    cli.processes = [{ pid: 12, kind: "cli", ancestors: [{ pid: 700, executable: shell }, { pid: paseoPid, executable: "Paseo Helper" }, { pid: 1, executable: "launchd" }], complete: true }];
+    await coordinator.request("agy", target);
+    await coordinator.tick(agents);
+    const h = coordinator.status().handoffs.agy!;
+    assert.equal(h.phase, "waiting", shell);
+    assert.equal(h.code, "agyOutsidePaseo", shell);
+    assert.equal(cli.switches.length, 0);
+  }
+  // An unreadable name between the process and the daemon proves nothing either.
+  const { cli, agents, coordinator } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [{ pid: 12, kind: "cli", ancestors: [{ pid: 700, executable: null }, { pid: paseoPid, executable: "Paseo Helper" }, { pid: 1, executable: "launchd" }], complete: true }];
+  await coordinator.request("agy", target);
+  await coordinator.tick(agents);
+  assert.equal(coordinator.status().handoffs.agy?.code, "attributionUnknown");
   assert.equal(cli.switches.length, 0);
 });
 

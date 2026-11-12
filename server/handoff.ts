@@ -113,6 +113,19 @@ export function paseoAnchorPid(own: { pid: number; ppid: number; forked: boolean
  * terminal apps, launchd and a generic "node" are never accepted; a daemon run another way fails closed.
  */
 export const paseoDaemonExecutables = ["Paseo Helper", "Paseo"];
+/**
+ * Review RH3: shells, multiplexers and terminal apps. One of these between an agy process and the
+ * daemon means a person started it (for example in a Paseo terminal pane), so it is not an agent's.
+ * Compared case-insensitively; a login shell's leading "-" is ignored.
+ */
+const interactiveExecutables = new Set(
+  [
+    "sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "xonsh", "elvish", "pwsh", "powershell",
+    "tmux", "screen", "zellij", "abduco", "dtach", "mosh-server", "sshd", "login", "su", "sudo", "script",
+    "terminal", "iterm2", "ghostty", "kitty", "alacritty", "wezterm", "wezterm-gui", "hyper", "warp", "stable", "tabby", "rio",
+  ],
+);
+const interactive = (name: string) => interactiveExecutables.has(name.replace(/^-/, "").toLowerCase());
 const busyStatus = (a: AgentSnapshot) => a.activeTurn || a.status === "running" || a.status === "initializing";
 const terminal = (h: Handoff | null) => !h || !(activePhases as readonly string[]).includes(h.phase);
 const ok = (code: string, message: string): ActionResult => ({ outcome: "success", code, message });
@@ -533,10 +546,24 @@ export class HandoffCoordinator {
         });
         return;
       }
-      const ours = (p: AgyProcessInfo) => !!p.ancestors?.some((a) => a.pid === anchor);
+      // Paseo's only if the anchor is an ancestor and nothing between them is a shell or terminal (RH3).
+      const between = (p: AgyProcessInfo) => {
+        const index = p.ancestors?.findIndex((a) => a.pid === anchor) ?? -1;
+        return index < 0 ? null : p.ancestors!.slice(0, index);
+      };
+      const ours = (p: AgyProcessInfo) => {
+        const path = between(p);
+        return !!path && path.every((a) => a.executable !== null && !interactive(a.executable));
+      };
       const paseo = inventory.processes.filter(ours);
-      // A chain that stopped early (unreadable parent, cycle, 32-entry bound) proves nothing.
-      const unknown = inventory.processes.filter((p) => !ours(p) && (p.ancestors === null || !p.complete));
+      // A chain that stopped early (unreadable parent, cycle, 32-entry bound) or an unreadable name
+      // between the process and the daemon proves nothing.
+      const unknown = inventory.processes.filter((p) => {
+        if (ours(p)) return false;
+        const path = between(p);
+        if (path) return !path.some((a) => a.executable !== null && interactive(a.executable));
+        return p.ancestors === null || !p.complete;
+      });
       const outside = inventory.processes.length - paseo.length - unknown.length;
       if (unknown.length > 0) {
         this.update(h, { waitingFor: unknown.length, code: "attributionUnknown", message: "The CLI did not report which process started each running agy session, so SubBaton cannot tell Paseo's from terminal sessions. Waiting; nothing is stopped." });

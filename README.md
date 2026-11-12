@@ -17,3 +17,6 @@ Tests use a fake CLI. Build checks separate browser-safe client and Node server 
 Before every actual CLI run the plugin checks canonical ownership/permissions of the binary and all parents, then its Developer ID/team/identifier. PATH lookup is explicit opt-in, off by default. Abnormal mutations require recovery inspection; status/configuration failures have a short negative cache. Named switches accept known UUIDs only. Unknown schema additions remain visible as unknown/read-only. The footer stays on one measured line; SDK 0.15.3 still requires host-scoped preferences.
 
 Phase 6b settings: the "SubBaton settings" screen renders every field from `subbaton settings get --json` metadata and sends one provider batch per Apply through `settings set --json-input -` (stdin, expected revision required). Release/resume actions, poller install/uninstall, events and `auto plan` use fixed allowlisted argv. See docs/decisions.md.
+
+Phase 6b handoff: "When idle" (Codex/agy) waits until every Paseo agent of that provider is idle, lets the CLI switch (agy with `--stop-agy`), requires a verified result and reopens the affected agents with `agent.reload()`. Codex agents are also reloaded after automatic switches. See docs/decisions.md.
+

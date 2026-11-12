@@ -1,6 +1,8 @@
 import { BinaryTrustError } from "./binary.js";
 import { settingsMessages } from "../shared/settings-messages.js";
 import { z } from "zod";
+import type { HandoffCli, SwitchOutcome } from "./handoff.js";
+import type { HandoffProvider } from "../shared/handoff.js";
 import {
   normalizeDocument,
   normalizeSection,
@@ -45,7 +47,13 @@ const envelope = z.object({
   schemaVersion: z.literal(1),
   ok: z.boolean(),
   result: z.unknown().optional(),
-  error: z.object({ code: z.string(), cause: z.string().optional() }).optional(),
+  error: z
+    .object({
+      code: z.string(),
+      cause: z.string().optional(),
+      stoppedProcesses: z.array(z.unknown()).max(1024).optional(),
+    })
+    .optional(),
 });
 const failure = (code: string, message: string): ActionResult => ({
   outcome: "error",
@@ -194,6 +202,8 @@ export class SubBatonService {
             messages[code] ??
               "SubBaton refused the operation. Inspect the CLI safely.",
           ),
+          // agy: holders may already have been stopped when the switch then failed.
+          stopped: code === "stopFailed" || (value.error?.stoppedProcesses?.length ?? 0) > 0,
         } as const;
       }
       if (
@@ -658,6 +668,71 @@ export class SubBatonService {
     if (!plan.success)
       return { ok: false, data: null, error: failure("invalidResponse", "Automatic plan schema is unsupported.") };
     return { ok: true, data: plan.data, error: null };
+  }
+
+  // ---- Phase 6b part 2: CLI side of the coordinated handoff ----
+
+  knownAccount(provider: Provider, target: string): { alias: string } | null {
+    const account = this.knownStatus?.providers
+      .find((p) => p.provider === provider)
+      ?.accounts.find((a) => a.id === target);
+    return account ? { alias: account.alias } : null;
+  }
+  async agyProcesses(): Promise<{ ok: true; processes: { kind: string }[] } | { ok: false }> {
+    const response = await this.call(["agy", "processes"], 15000, false, { kind: "settings" });
+    const processes = (response.result as { processes?: unknown } | undefined)?.processes;
+    if (response.error || !Array.isArray(processes) || processes.length > 1024) return { ok: false };
+    return {
+      ok: true,
+      processes: processes.map((p) => ({
+        kind: typeof (p as { kind?: unknown })?.kind === "string" ? String((p as { kind: string }).kind).slice(0, 32) : "unknown",
+      })),
+    };
+  }
+  /** Runs a handoff switch: fixed argv, verified outcome required, stop detection on refusal. */
+  async handoffSwitch(provider: HandoffProvider, target: string, flags: string[]): Promise<SwitchOutcome> {
+    const allowed = provider === "agy" ? ["--stop-agy"] : ["--restart-daemon"];
+    if (!/^[0-9a-f-]{36}$/i.test(target) || flags.some((f) => !allowed.includes(f)) || !this.knownAccount(provider, target))
+      return { kind: "refused", code: "invalidInput", message: "The handoff target is not a known saved account." };
+    if (this.mutating) return { kind: "busy", code: "busy", message: "Another SubBaton action is still running." };
+    this.mutating = true;
+    this.invalidate();
+    try {
+      const response = await this.call([provider, "switch", target, ...flags], 120000, true);
+      if (response.error) {
+        const stopped = "stopped" in response && response.stopped === true;
+        if (response.error.outcome === "uncertain")
+          return { kind: "uncertain", code: "uncertain", message: "The switch result is uncertain." };
+        return {
+          kind: stopped ? "stoppedFailed" : "refused",
+          code: response.error.code,
+          message: response.error.message,
+        };
+      }
+      const result = response.result as { outcome?: unknown; postSwitchVerification?: unknown; daemonOutcome?: unknown };
+      const daemonOutcome = typeof result.daemonOutcome === "string" ? result.daemonOutcome.slice(0, 64) : null;
+      if (result.outcome === "alreadyActive" || result.outcome === "unchanged")
+        return { kind: "unchanged", code: "alreadyActive", message: "That account was already active.", daemonOutcome };
+      const verified = provider === "agy" ? ["verified", "reapplied"] : ["verified"];
+      if (result.outcome === "switched" && verified.includes(String(result.postSwitchVerification)))
+        return { kind: "switched", code: "switched", message: "Switch verified.", daemonOutcome };
+      return { kind: "uncertain", code: "uncertain", message: "The switch could not be verified.", daemonOutcome };
+    } finally {
+      this.invalidate();
+      this.mutating = false;
+    }
+  }
+  /** The coordinator's view of this service. */
+  handoffCli(): HandoffCli {
+    return {
+      agyProcesses: () => this.agyProcesses(),
+      switchAccount: (provider, target, flags) => this.handoffSwitch(provider, target, flags),
+      events: async (since) => {
+        const read = await this.events(since === null ? {} : { since: Math.floor(since) });
+        return read.ok && read.data ? { ok: true, events: read.data.events } : { ok: false };
+      },
+      knownAccount: (provider, target) => this.knownAccount(provider, target),
+    };
   }
 }
 const uncertainSettings = (): ActionResult => ({

@@ -17,6 +17,10 @@ import {
   setDraft,
   storedValue,
   validKey,
+  rebaseOrder,
+  changedSince,
+  autoEnabledChanges,
+  aliasMap,
   type Draft,
 } from "../client/settings-model.js";
 import { claudeSection, settingsDocument, accountA, accountB, plan } from "./settings-fixtures.js";
@@ -162,4 +166,47 @@ test("events and plans get readable summaries from codes", () => {
   assert.match(summary.lines.at(-1)!, /Weekly reset priority: home/);
   assert.match(summary.candidates[0]!.windows[0]!, /97% of 95% \(provider global\), fresh/);
   assert.equal(summary.sequences[0], "home → work: 10.1 points expire");
+});
+
+test("order drafts rebase onto the current accounts", () => {
+  assert.deepEqual(rebaseOrder(["b", "a"], ["a", "b"]), { ids: ["b", "a"], changed: false });
+  assert.deepEqual(rebaseOrder(["b", "a"], ["a", "b", "c"]), { ids: ["b", "a", "c"], changed: true });
+  assert.deepEqual(rebaseOrder(["b", "x", "a"], ["a", "b"]), { ids: ["b", "a"], changed: true });
+});
+
+test("after a conflict only draft fields whose stored value changed are marked", () => {
+  const base = section();
+  const values = structuredClone(claudeSection().values) as Record<string, any>;
+  values.cooldownMinutes = 9;
+  values.strategy = "best";
+  const fresh = normalizeSection("claude", claudeSection("r2", values));
+  let draft = setDraft({}, base, ["cooldownMinutes"], 12, 5);
+  draft = setDraft(draft, base, ["strategy"], "consume-first", "best");
+  const changed = changedSince(base, fresh, draft);
+  assert.deepEqual([...changed], ["cooldownMinutes"]);
+  const cooldown = providerGroups(fresh, draft, changed).flatMap((g) => g.fields).find((f) => f.key === "cooldownMinutes")!;
+  assert.equal(cooldown.changedElsewhere, true);
+  assert.equal(cooldown.value, 12);
+});
+
+test("Apply lists automatic switching changes for confirmation", () => {
+  const s = section();
+  assert.deepEqual(autoEnabledChanges(setDraft({}, s, ["autoEnabled"], true, false)), [true]);
+  assert.deepEqual(autoEnabledChanges(setDraft({}, s, ["strategy"], "consume-first", "best")), []);
+});
+
+test("event rows resolve account IDs to the aliases settings reports", () => {
+  const aliases = aliasMap([section()]);
+  assert.equal(
+    eventSummary({ id: "1", at: 1, provider: "claude", kind: "automaticSwitch", account: accountA, target: accountB, reason: "thresholdReached" }, aliases),
+    "Automatic switch work → home (threshold reached)",
+  );
+  assert.match(eventSummary({ id: "2", at: 1, provider: "codex", kind: "needsLogin", account: "99999999-9999-4999-8999-999999999999" }, aliases), /unknown account/);
+});
+
+test("fields carry the CLI's runtimeDetail", () => {
+  const raw = claudeSection();
+  (raw.fields as Record<string, unknown>[]).find((f) => f.path === "<provider>.notifications.enabled")!.runtimeDetail = "Recorded in the event log.";
+  const s = normalizeSection("claude", raw);
+  assert.equal(s.fields.find((f) => f.path === "notifications.enabled")?.runtimeDetail, "Recorded in the event log.");
 });

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRpc, useSettings, type PluginSurfaceProps } from "@getpaseo/plugin/client";
@@ -42,6 +42,10 @@ import {
   setDraft,
   storedValue,
   validKey,
+  rebaseOrder,
+  changedSince,
+  autoEnabledChanges,
+  aliasMap,
   type Draft,
   type FieldView,
 } from "./settings-model.js";
@@ -81,7 +85,7 @@ function Button({
       onFocus={(e) => setFocused(keyboardFocus(e.currentTarget))}
       onBlur={() => setFocused(false)}
       style={{
-        minHeight: 36,
+        minHeight: 44,
         minWidth: 44,
         paddingHorizontal: 12,
         justifyContent: "center",
@@ -137,10 +141,23 @@ function Badge({ text, colors, tone }: { text: string; colors: Colors; tone?: "w
 }
 
 // Fields report invalid text so Apply never sends a value other than what is on screen.
-const InvalidContext = createContext<(key: string, invalid: boolean) => void>(() => {});
+// Invalid text also drops that field's draft entry, so nothing hidden or stale is ever sent (review L2).
+const InvalidContext = createContext<{ report: (key: string, invalid: boolean) => void; revert: (path: string[]) => void }>({
+  report: () => {},
+  revert: () => {},
+});
 
 const hintFor = (view: FieldView, extra = "") =>
-  [view.field.description, extra, view.runtime, view.pending ? "Pending change." : ""].filter(Boolean).join(" ");
+  [
+    view.changedElsewhere ? "Changed elsewhere since you started editing; review the stored value before applying again." : "",
+    view.field.description,
+    extra,
+    view.runtime + ".",
+    view.field.runtimeDetail ?? "",
+    view.pending ? "Pending change." : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
 function NumberField({
   view,
@@ -156,7 +173,7 @@ function NumberField({
   revisionKey: string;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const report = useContext(InvalidContext);
+  const { report, revert } = useContext(InvalidContext);
   useEffect(() => () => report(view.key, false), [view.key]);
   const effective =
     view.field.nullable && view.effective !== undefined && view.effective !== null
@@ -174,8 +191,10 @@ function NumberField({
       onChangeText={(text) => {
         const parsed = parseNumber(text, view.field);
         report(view.key, "error" in parsed);
-        if ("error" in parsed) setError(parsed.error);
-        else {
+        if ("error" in parsed) {
+          setError(parsed.error);
+          revert(view.path);
+        } else {
           setError(null);
           onChange(parsed.value);
         }
@@ -322,6 +341,10 @@ interface Confirm {
   body: string;
   confirm: string;
   run: () => Promise<void>;
+  /** Further explicit choices, for example the poller's environment pins. */
+  alternatives?: { label: string; run: () => Promise<void> }[];
+  /** Where a transport failure is reported. */
+  notice?: string;
 }
 
 function AccountCard({
@@ -333,10 +356,12 @@ function AccountCard({
   update,
   revisionKey,
   action,
+  changed,
 }: {
   section: Section;
   account: SettingsAccount;
   draft: Draft;
+  changed: ReadonlySet<string>;
   disabled: boolean;
   colors: Colors;
   update: (path: string[], value: Leaf) => void;
@@ -344,7 +369,7 @@ function AccountCard({
   action: (input: SettingsActionInput, title: string, body: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const fields = accountFields(section, account, draft);
+  const fields = accountFields(section, account, draft, changed);
   const primary = fields.filter((f) => f.field.type === "boolean" || f.field.type === "integer");
   const overrides = fields.filter((f) => !primary.includes(f));
   const badges = accountBadges(account);
@@ -508,6 +533,10 @@ export function ControlScreen(props: PluginSurfaceProps) {
   const [epoch, setEpoch] = useState(0);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [invalid, setInvalid] = useState<Record<string, true>>({});
+  // M1: each provider's draft remembers the section it started from and sends that revision.
+  const [bases, setBases] = useState<Partial<Record<Provider, Section>>>({});
+  const [changed, setChanged] = useState<Partial<Record<Provider, Set<string>>>>({});
+  const [orderNotice, setOrderNotice] = useState<Partial<Record<Provider, string>>>({});
   const report = (field: string, bad: boolean) =>
     setInvalid((all) => {
       const id = `${selected}:${field}`;
@@ -525,6 +554,14 @@ export function ControlScreen(props: PluginSurfaceProps) {
     void client.invalidateQueries({ queryKey: ["subbaton-status", hostId] });
     void client.invalidateQueries({ queryKey: ["subbaton-plan"] });
     setEpoch((n) => n + 1);
+    return fresh;
+  };
+  const clearDraft = (p: Provider) => {
+    setDrafts((all) => ({ ...all, [p]: {} }));
+    setBases((all) => ({ ...all, [p]: undefined }));
+    setChanged((all) => ({ ...all, [p]: undefined }));
+    setOrderNotice((all) => ({ ...all, [p]: undefined }));
+    setInvalid((all) => Object.fromEntries(Object.entries(all).filter(([id]) => !id.startsWith(p + ":"))));
   };
   const data = settings.data?.ok ? settings.data.data : null;
   const section = data?.providers.find((p) => p.provider === selected) ?? null;
@@ -533,24 +570,71 @@ export function ControlScreen(props: PluginSurfaceProps) {
   const editable = !!section?.ok && !section.readOnly && !busy;
   const revisionKey = `${section?.ok ? section.revision : "none"}:${epoch}:`;
 
+  // Values are compared with the draft's base section, so a background refetch never rebases it.
+  const baseSection = (section?.ok ? (bases[selected] ?? section) : null) as Section | null;
   const update = (path: string[], value: Leaf) => {
-    if (!section?.ok) return;
-    setDrafts((all) => ({ ...all, [selected]: setDraft(all[selected], section, path, value, storedValue(section, path)) }));
+    if (!baseSection) return;
+    if (!bases[selected]) setBases((all) => ({ ...all, [selected]: baseSection }));
+    setDrafts((all) => ({ ...all, [selected]: setDraft(all[selected], baseSection, path, value, storedValue(baseSection, path)) }));
   };
-  const apply = async () => {
-    if (!section?.ok || changes.length === 0) return;
+  const revert = (path: string[]) => {
+    const key = path.join("/");
+    setDrafts((all) => {
+      if (!Object.hasOwn(all[selected], key)) return all;
+      const next = { ...all[selected] };
+      delete next[key];
+      return { ...all, [selected]: next };
+    });
+  };
+  // L3: when the account set changes under an order draft, rebase it and say so.
+  const accountKey = section?.ok ? section.accounts.map((a) => a.id).join(",") : "";
+  const lastAccounts = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!section?.ok) return;
+    const previous = lastAccounts.current[selected];
+    lastAccounts.current[selected] = accountKey;
+    const drafted = drafts[selected]["order"]?.value;
+    if (previous === undefined || previous === accountKey || !Array.isArray(drafted)) return;
+    const rebased = rebaseOrder(drafted, section.accounts.map((a) => a.id));
+    if (!rebased.changed) return;
+    setDrafts((all) => ({ ...all, [selected]: { ...all[selected], order: { path: ["order"], value: rebased.ids } } }));
+    setOrderNotice((all) => ({ ...all, [selected]: "Accounts were added or removed since you reordered. The draft order was rebased; review it before applying." }));
+  }, [accountKey, selected]);
+  const submit = async () => {
+    if (!section?.ok || !baseSection || changes.length === 0) return;
+    const provider = selected;
+    const base = baseSection;
     setBusy(true);
     try {
-      const response = await setSettings({ provider: selected, expectedRevision: section.revision, changes });
-      setNotices((n) => ({ ...n, [selected]: response.result }));
-      if (response.result.outcome === "success") setDrafts((all) => ({ ...all, [selected]: {} }));
-      // A conflict keeps the draft so the owner can review the reloaded values and apply again.
-      await reload();
+      const response = await setSettings({ provider, expectedRevision: base.revision, changes });
+      setNotices((n) => ({ ...n, [provider]: response.result }));
+      if (response.result.outcome === "success") clearDraft(provider);
+      const fresh = await reload();
+      if (response.result.code === "revisionConflict") {
+        // Keep the draft, show which drafted fields changed elsewhere, and rebase on the reloaded values.
+        const latest = fresh.ok ? fresh.data?.providers.find((p) => p.provider === provider) : null;
+        if (latest?.ok) {
+          setChanged((all) => ({ ...all, [provider]: changedSince(base, latest, drafts[provider]) }));
+          setBases((all) => ({ ...all, [provider]: latest }));
+        }
+      }
     } catch {
       setNotices((n) => ({ ...n, [selected]: { outcome: "error", code: "transport", message: "The request did not reach the host. Reload settings before retrying." } }));
     } finally {
       setBusy(false);
     }
+  };
+  const apply = () => {
+    const auto = autoEnabledChanges(draft);
+    if (auto.length === 0) return void submit();
+    setConfirm({
+      title: `${auto[0] ? "Turn on" : "Turn off"} automatic switching for ${providerLabel[selected]}?`,
+      body: auto[0]
+        ? "The poller will switch this provider's accounts on its own when the CLI's rules say so. The other pending changes are applied in the same batch."
+        : "The poller stops switching this provider's accounts automatically. The other pending changes are applied in the same batch.",
+      confirm: "Apply",
+      run: submit,
+    });
   };
   const action = (input: SettingsActionInput, title: string, body: string) =>
     setConfirm({
@@ -563,20 +647,35 @@ export function ControlScreen(props: PluginSurfaceProps) {
         await reload();
       },
     });
-  const lifecycle = (install: boolean) =>
+  const pinnedText = (pins: Record<string, string> | null | undefined) =>
+    pins && Object.keys(pins).length
+      ? Object.entries(pins).map(([k, v]) => `${k}=${v}`).join(", ")
+      : "none (default provider homes)";
+  const lifecycle = (install: boolean) => {
+    const run = (environment: "keep" | "current" | "none") => async () => {
+      setNotices((n) => ({ ...n, poller: null }));
+      const response = await changePoller(install ? { action: "install", environment } : { action: "uninstall" });
+      setNotices((n) => ({ ...n, poller: response.result }));
+      await poller.refetch();
+      await reload();
+    };
+    const pins = poller.data?.ok ? poller.data.data?.pinnedEnvironment : null;
     setConfirm({
       title: install ? "Install the usage poller?" : "Uninstall the usage poller?",
       body: install
-        ? "Installs the per-user LaunchAgent on the Mac with the SubBaton binary this plugin verified."
+        ? `Installs the per-user LaunchAgent on the Mac with the SubBaton binary this plugin verified. Pinned provider homes now: ${pinnedText(pins)}. Install keeps them. Re-pinning uses the Paseo daemon's environment, which can differ from your shell; only do that if you know it is right.`
         : "Removes the per-user LaunchAgent on the Mac. Saved accounts, caches and logs are kept.",
-      confirm: install ? "Install" : "Uninstall",
-      run: async () => {
-        const response = await changePoller({ action: install ? "install" : "uninstall" });
-        setNotices((n) => ({ ...n, poller: response.result }));
-        await poller.refetch();
-        await reload();
-      },
+      confirm: install ? "Install (keep pinned homes)" : "Uninstall",
+      notice: "poller",
+      run: run("keep"),
+      alternatives: install
+        ? [
+            { label: "Re-pin from Paseo's environment", run: run("current") },
+            { label: "Remove pinned homes", run: run("none") },
+          ]
+        : [],
     });
+  };
 
   const tabs = (
     <View accessibilityRole="tablist" style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
@@ -591,7 +690,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
             accessibilityLabel={`${providerLabel[p]} settings${row && !row.ok ? ", unavailable" : ""}${pending ? `, ${pending} pending changes` : ""}`}
             onPress={() => setSelected(p)}
             style={{
-              minHeight: 36,
+              minHeight: 44,
               paddingHorizontal: 14,
               justifyContent: "center",
               borderRadius: 7,
@@ -616,8 +715,9 @@ export function ControlScreen(props: PluginSurfaceProps) {
   else if (settings.data && !settings.data.ok) body = <Notice result={settings.data.error} colors={colors} />;
   else if (section && !section.ok) body = <Notice result={section.error} colors={colors} />;
   else if (section?.ok) {
-    const groups = providerGroups(section, draft);
-    const order = orderView(section, draft);
+    const marks = changed[selected];
+    const groups = providerGroups(section, draft, marks);
+    const order = orderView(section, draft, marks);
     body = (
       <View style={{ gap: 16 }}>
         {!section.exists && (
@@ -634,10 +734,10 @@ export function ControlScreen(props: PluginSurfaceProps) {
               label="Automatic switching paused"
               hint={`Reason: ${humanize(section.auto.pauseReason ?? "unknown")}${section.auto.pausedAt ? `, ${relativeAge(section.auto.pausedAt)}` : ""}.`}
               actionLabel="Resume"
-              disabled={busy || !section.actions.includes("resumeAuto")}
+              disabled={busy || !section.actions.includes("resumeAuto") || !section.auto.pauseId || changes.length > 0}
               onPress={() =>
                 action(
-                  { action: "resumeAuto", provider: section.provider, expectedRevision: section.revision },
+                  { action: "resumeAuto", provider: section.provider, pauseId: section.auto.pauseId ?? "", expectedRevision: section.revision },
                   `Resume automatic switching for ${providerLabel[section.provider]}?`,
                   "Resume only after checking why it paused. Open the automatic plan below for details.",
                 )
@@ -657,7 +757,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
         <SettingsSection title="Accounts">
           {order && order.accounts.length > 1 && (
             <SettingsCard>
-              <SettingsRow label={order.field.title} hint={hintFor(order)} />
+              <SettingsRow label={order.field.title} hint={hintFor(order)} error={orderNotice[selected] ?? null} />
               {order.accounts.map((account, index) => {
                 const ids = order.accounts.map((a) => a.id);
                 return (
@@ -694,6 +794,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
               update={update}
               revisionKey={revisionKey}
               action={action}
+              changed={marks ?? new Set()}
             />
           ))}
           {section.accounts.length === 0 && <Text style={{ color: colors.foregroundMuted }}>No saved accounts.</Text>}
@@ -704,11 +805,12 @@ export function ControlScreen(props: PluginSurfaceProps) {
   }
 
   const pollerData = poller.data?.ok ? poller.data.data : null;
+  const aliases = aliasMap((data?.providers ?? []).map((p) => (p.ok ? p : { ok: false })));
   const recent = events.data?.ok && events.data.data ? [...events.data.data.events].reverse().slice(0, 25) : [];
   const bin = binary.status === "ready" ? binary.values.binaryPath : "subbaton";
 
   return (
-    <InvalidContext.Provider value={report}>
+    <InvalidContext.Provider value={{ report, revert }}>
     <View style={{ gap: 16 }}>
       <Text style={{ color: colors.foregroundMuted }}>
         Every value, rule and description below comes from the SubBaton CLI on this host. Changes are sent as one batch per provider with the
@@ -731,8 +833,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
             colors={colors}
             disabled={busy}
             onPress={() => {
-              setDrafts((all) => ({ ...all, [selected]: {} }));
-              setInvalid({});
+              clearDraft(selected);
               setEpoch((n) => n + 1);
             }}
           />
@@ -755,6 +856,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
               >
                 {pollerData.stale && pollerData.installed && <Badge text="Stale" colors={colors} tone="warning" />}
               </SettingsRow>
+              <SettingsRow label="Pinned provider homes" hint={pinnedText(pollerData.pinnedEnvironment)} />
               {providers.map((p) => {
                 const row = pollerData.providers[p];
                 return row ? (
@@ -794,7 +896,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
           {recent.map((event) => (
             <SettingsRow
               key={event.id}
-              label={eventSummary(event)}
+              label={eventSummary(event, aliases)}
               hint={`${event.provider === "unknown" ? "Unknown provider" : providerLabel[event.provider]}, ${relativeAge(event.at)} (${timestamp(event.at)})`}
             />
           ))}
@@ -822,26 +924,30 @@ export function ControlScreen(props: PluginSurfaceProps) {
         <Modal.Content>
           <Text style={{ color: colors.foreground }}>{confirm?.body}</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            <Button
-              label={confirm?.confirm ?? "Confirm"}
-              tone="primary"
-              colors={colors}
-              disabled={busy}
-              onPress={() => {
-                const current = confirm;
-                if (!current) return;
-                setBusy(true);
-                void current
-                  .run()
-                  .catch(() =>
-                    setNotices((n) => ({ ...n, [selected]: { outcome: "error", code: "transport", message: "The request did not reach the host. Reload before retrying." } })),
-                  )
-                  .finally(() => {
-                    setBusy(false);
-                    setConfirm(null);
-                  });
-              }}
-            />
+            {[{ label: confirm?.confirm ?? "Confirm", run: confirm?.run }, ...(confirm?.alternatives ?? [])].map((choice, index) => (
+              <Button
+                key={choice.label}
+                label={choice.label}
+                tone={index === 0 ? "primary" : undefined}
+                colors={colors}
+                disabled={busy}
+                onPress={() => {
+                  const current = confirm;
+                  if (!current || !choice.run) return;
+                  const where = current.notice ?? selected;
+                  setBusy(true);
+                  void choice
+                    .run()
+                    .catch(() =>
+                      setNotices((n) => ({ ...n, [where]: { outcome: "error", code: "transport", message: "The request did not reach the host. Reload before retrying." } })),
+                    )
+                    .finally(() => {
+                      setBusy(false);
+                      setConfirm(null);
+                    });
+                }}
+              />
+            ))}
             <Button label="Cancel" colors={colors} disabled={busy} onPress={() => setConfirm(null)} />
           </View>
         </Modal.Content>

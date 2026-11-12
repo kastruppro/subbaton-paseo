@@ -40,6 +40,8 @@ export interface FieldView {
   pending: boolean;
   /** Nullable field currently inheriting (null). */
   inherits: boolean;
+  /** The stored value changed elsewhere after this draft started (shown after a conflict). */
+  changedElsewhere: boolean;
   runtime: "Active now" | "Stored only" | "Runtime unknown";
 }
 
@@ -95,6 +97,7 @@ function view(
   value: Leaf | undefined,
   effective: Leaf | undefined,
   draft: Draft,
+  changed: ReadonlySet<string> = new Set(),
 ): FieldView {
   const key = draftKey(path);
   const pending = Object.hasOwn(draft, key);
@@ -108,6 +111,7 @@ function view(
     effective,
     pending,
     inherits: field.nullable && shown === null,
+    changedElsewhere: changed.has(key),
     runtime: runtimeLabel(field.runtime),
   };
 }
@@ -131,32 +135,32 @@ export function groupFor(path: string): GroupTitle {
 }
 
 /** Provider-level fields grouped for display; account fields and order are handled separately. */
-export function providerGroups(section: SettingsSection, draft: Draft) {
+export function providerGroups(section: SettingsSection, draft: Draft, changed?: ReadonlySet<string>) {
   const groups = new Map<GroupTitle, FieldView[]>();
   for (const field of section.fields) {
     if (isChild(field) || field.path.startsWith("accounts.") || field.path === "order") continue;
     const path = field.path.split(".");
-    const item = view(section, field, path, section.values[field.path], section.effective[field.path], draft);
+    const item = view(section, field, path, section.values[field.path], section.effective[field.path], draft, changed);
     const title = groupFor(field.path);
     groups.set(title, [...(groups.get(title) ?? []), item]);
   }
   return groupOrder.filter((t) => groups.has(t)).map((title) => ({ title, fields: groups.get(title)! }));
 }
 
-export function accountFields(section: SettingsSection, account: SettingsAccount, draft: Draft) {
+export function accountFields(section: SettingsSection, account: SettingsAccount, draft: Draft, changed?: ReadonlySet<string>) {
   const prefix = "accounts.<account>.";
   return section.fields
     .filter((f) => f.path.startsWith(prefix) && !isChild(f))
     .map((field) => {
       const sub = field.path.slice(prefix.length);
-      return view(section, field, ["accounts", account.id, ...sub.split(".")], account.values[sub], account.effective[sub], draft);
+      return view(section, field, ["accounts", account.id, ...sub.split(".")], account.values[sub], account.effective[sub], draft, changed);
     });
 }
 
-export function orderView(section: SettingsSection, draft: Draft) {
+export function orderView(section: SettingsSection, draft: Draft, changed?: ReadonlySet<string>) {
   const field = section.fields.find((f) => f.path === "order");
   if (!field) return null;
-  const item = view(section, field, ["order"], section.values.order, undefined, draft);
+  const item = view(section, field, ["order"], section.values.order, undefined, draft, changed);
   const ids = Array.isArray(item.value) ? item.value : section.accounts.map((a) => a.id);
   const accounts = ids.flatMap((id) => section.accounts.filter((a) => a.id === id));
   return { ...item, accounts };
@@ -259,9 +263,16 @@ export function accountBadges(account: SettingsAccount) {
   ].filter((v): v is string => v !== null);
 }
 
-export function eventSummary(event: SubBatonEvent) {
-  const who = event.alias ?? event.account ?? "";
-  const target = event.targetAlias ?? event.target;
+/** Account IDs → aliases as the CLI reports them in settings; events carry IDs only. */
+export function aliasMap(sections: { ok: boolean; accounts?: SettingsAccount[] }[]) {
+  const map = new Map<string, string>();
+  for (const s of sections) for (const a of s.accounts ?? []) map.set(a.id, a.alias);
+  return map;
+}
+export function eventSummary(event: SubBatonEvent, aliases: ReadonlyMap<string, string> = new Map()) {
+  const name = (id?: string) => (id ? (aliases.get(id) ?? "unknown account") : "");
+  const who = event.account ? name(event.account) : (event.alias ?? "");
+  const target = event.target ? name(event.target) : event.targetAlias;
   return [
     event.kind === "unknown" ? "Event" : humanize(event.kind).replace(/^./, (c) => c.toUpperCase()),
     who && target ? `${who} → ${target}` : who || target || "",
@@ -305,3 +316,27 @@ export function planSummary(plan: AutoPlan) {
     ),
   };
 }
+
+/**
+ * Rebases an order draft onto the current accounts (review L3): kept accounts keep the drafted
+ * order, new accounts are appended in their saved order, removed ones are dropped.
+ */
+export function rebaseOrder(drafted: string[], current: string[]): { ids: string[]; changed: boolean } {
+  const kept = drafted.filter((id) => current.includes(id));
+  const ids = [...kept, ...current.filter((id) => !kept.includes(id))];
+  return { ids, changed: ids.length !== drafted.length || ids.some((id, i) => id !== drafted[i]) };
+}
+/** Draft keys whose stored value differs between the draft's base section and a fresher one. */
+export function changedSince(base: SettingsSection, fresh: SettingsSection, draft: Draft): Set<string> {
+  const changed = new Set<string>();
+  for (const { path } of Object.values(draft))
+    if (JSON.stringify(storedValue(base, path)) !== JSON.stringify(storedValue(fresh, path))) changed.add(draftKey(path));
+  return changed;
+}
+/** Draft entries that turn automatic switching on or off; Apply confirms these (review I4). */
+export function autoEnabledChanges(draft: Draft): boolean[] {
+  return Object.values(draft)
+    .filter(({ path, value }) => path.length === 1 && path[0] === "autoEnabled" && typeof value === "boolean")
+    .map(({ value }) => value as boolean);
+}
+

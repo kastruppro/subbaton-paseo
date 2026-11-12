@@ -7,6 +7,15 @@ import {
   strategyRpc,
   refreshRpc,
 } from "./shared/contracts.js";
+import {
+  settingsGetRpc,
+  settingsSetRpc,
+  settingsActionRpc,
+  pollerStatusRpc,
+  pollerLifecycleRpc,
+  eventsRpc,
+  autoPlanRpc,
+} from "./shared/settings.js";
 import { SubBatonService } from "./server/service.js";
 import { nativeCLI } from "./server/exec.js";
 import { resolveBinary } from "./server/binary.js";
@@ -26,6 +35,13 @@ export default function contribute(server: PluginServerContext) {
   server.handle(switchRpc, (input) => service.switch(input));
   server.handle(strategyRpc, (input) => service.strategy(input));
   server.handle(refreshRpc, () => service.refresh());
+  server.handle(settingsGetRpc, (input) => service.settings(input));
+  server.handle(settingsSetRpc, (input) => service.settingsSet(input));
+  server.handle(settingsActionRpc, (input) => service.settingsAction(input));
+  server.handle(pollerStatusRpc, () => service.pollerStatus());
+  server.handle(pollerLifecycleRpc, (input) => service.pollerLifecycle(input));
+  server.handle(eventsRpc, (input) => service.events(input));
+  server.handle(autoPlanRpc, (input) => service.autoPlan(input));
   return () => {
     unsubscribe();
   };

@@ -1,9 +1,14 @@
 import { execFile } from "node:child_process";
 import type { CliExecutor } from "./service.js";
+export const maxInputBytes = 128 * 1024;
 export const nativeCLI: CliExecutor = {
-  run(binary, argv, timeout) {
+  run(binary, argv, timeout, input) {
     return new Promise((resolve) => {
-      execFile(
+      if (input !== undefined && Buffer.byteLength(input) > maxInputBytes) {
+        resolve({ code: -1, stdout: "", notStarted: true });
+        return;
+      }
+      const child = execFile(
         binary,
         argv,
         {
@@ -18,6 +23,10 @@ export const nativeCLI: CliExecutor = {
           resolve({ ...classifyExit(error), stdout: stdout ?? "" });
         },
       );
+      // Batch settings travel on stdin (no shell, no temp file). A child that exits early closes
+      // the pipe; the exit callback decides the outcome, so pipe errors are ignored here.
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(input ?? "");
     });
   },
 };

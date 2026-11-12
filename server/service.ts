@@ -1,5 +1,29 @@
 import { BinaryTrustError } from "./binary.js";
+import { settingsMessages } from "../shared/settings-messages.js";
 import { z } from "zod";
+import {
+  normalizeDocument,
+  normalizeSection,
+  validateChanges,
+  settingsError,
+} from "./settings.js";
+import {
+  settingsGetInput,
+  settingsSetInput,
+  settingsActionInput,
+  pollerLifecycleInput,
+  pollerStatusSchema,
+  eventsInput,
+  eventSchema,
+  autoPlanInput,
+  autoPlanSchema,
+  type SettingsResult,
+  type SettingsSection,
+  type MutationResult,
+  type PollerStatus,
+  type SubBatonEvent,
+  type AutoPlan,
+} from "../shared/settings.js";
 import {
   statusSchema,
   switchInput,
@@ -14,6 +38,7 @@ export interface CliExecutor {
     binary: string,
     argv: string[],
     timeout: number,
+    input?: string,
   ): Promise<{ code: number; stdout: string; notStarted?: boolean }>;
 }
 const envelope = z.object({
@@ -41,6 +66,18 @@ const messages: Record<string, string> = {
   conflict: "Login ownership is conflicting. Review it with the CLI.",
   deviceBlocked: "The issuer blocked this device/account.",
 };
+type CallKind = "credential" | "settings" | "poller";
+interface CallOptions {
+  kind?: CallKind;
+  input?: string;
+  unavailable?: [string, string];
+}
+const uncertainMessages: Record<Exclude<CallKind, "credential">, string> = {
+  settings:
+    "The settings result is unknown. Reload settings and check the current values before retrying; nothing was retried.",
+  poller:
+    "The poller change is unknown. Read poller status before retrying; nothing was retried.",
+};
 export class SubBatonService {
   private cached: { value: StatusResult; at: number } | null = null;
   private pending: Promise<StatusResult> | null = null;
@@ -52,21 +89,39 @@ export class SubBatonService {
     private binary: () => Promise<string>,
     private now: () => number = Date.now,
   ) {}
+  private settingsCache: { value: SettingsResult; at: number } | null = null;
+  private settingsPending: Promise<SettingsResult> | null = null;
+  private knownSettings = new Map<Provider, SettingsSection>();
   private invalidate() {
     this.cached = null;
     this.generation++;
     this.pending = null;
+    this.settingsCache = null;
+    this.settingsPending = null;
   }
-  private async call(argv: string[], timeout = 120000, mutation = false) {
-    const uncertain = (cause?: string): ActionResult => ({
-      outcome: "uncertain",
-      code: "uncertain",
-      ...(cause && messages[cause] ? { cause } : {}),
-      message: (cause && messages[cause] ? messages[cause] + " " : "") +
-        "Result uncertain. Run recovery with the SubBaton CLI and inspect current state before retrying. Agents were not reopened.",
-    });
+  private async call(
+    command: string[] | ((binary: string) => string[]),
+    timeout = 120000,
+    mutation = false,
+    options: CallOptions = {},
+  ) {
+    const kind = options.kind ?? "credential";
+    const uncertain = (cause?: string): ActionResult =>
+      kind === "credential"
+        ? {
+            outcome: "uncertain",
+            code: "uncertain",
+            ...(cause && messages[cause] ? { cause } : {}),
+            message: (cause && messages[cause] ? messages[cause] + " " : "") +
+              "Result uncertain. Run recovery with the SubBaton CLI and inspect current state before retrying. Agents were not reopened.",
+          }
+        : { outcome: "uncertain", code: "uncertain", message: uncertainMessages[kind] };
     const abnormal = (code: string, message: string) =>
-      mutation ? uncertain() : failure(code, message);
+      mutation
+        ? uncertain()
+        : options.unavailable
+          ? failure(...options.unavailable)
+          : failure(code, message);
     let binary: string;
     try {
       binary = await this.binary();
@@ -80,8 +135,14 @@ export class SubBatonService {
         ),
       } as const;
     }
+    const argv = typeof command === "function" ? command(binary) : command;
     try {
-      const result = await this.cli.run(binary, [...argv, "--json"], timeout);
+      const result = await this.cli.run(
+        binary,
+        [...argv, "--json"],
+        timeout,
+        ...(options.input === undefined ? [] : [options.input]),
+      );
       if (result.notStarted)
         return {
           error: failure(
@@ -114,6 +175,16 @@ export class SubBatonService {
       const value = parsed.data;
       if (mutation && (result.code === 2 || ["uncertain", "usageRecoveryUncertain", "lockLost"].includes(value.error?.code ?? "")))
         return { error: uncertain(value.error?.cause ?? value.error?.code) } as const;
+      if (result.code === 1 && !value.ok && kind !== "credential") {
+        const code = value.error?.code ?? "";
+        const message = settingsMessages[code] ?? messages[code];
+        return {
+          error: failure(
+            message ? code : "cliError",
+            message ?? "SubBaton refused the operation. Inspect the CLI safely.",
+          ),
+        } as const;
+      }
       if (result.code === 1 && !value.ok) {
         const code = value.error?.code ?? "";
         return {
@@ -138,6 +209,7 @@ export class SubBatonService {
         } as const;
       if (
         mutation &&
+        kind === "credential" &&
         !argv.includes("usage") &&
         !["switched", "unchanged", "alreadyActive", "no-candidate"].includes(
           (value.result as { outcome: string }).outcome,
@@ -156,6 +228,7 @@ export class SubBatonService {
   }
   configurationChanged() {
     this.knownStatus = null;
+    this.knownSettings.clear();
     this.invalidate();
   }
   private async fetchStatus(generation: number): Promise<StatusResult> {
@@ -334,4 +407,251 @@ export class SubBatonService {
     this.invalidate();
     return results;
   }
+
+  // ---- Phase 6b: settings, poller, events and auto plan (all through the trusted CLI) ----
+
+  private async fetchSettings(generation: number): Promise<SettingsResult> {
+    const response = await this.call(["settings", "get"], 20000, false, {
+      kind: "settings",
+      unavailable: [
+        "settingsUnavailable",
+        "SubBaton settings could not be read. Retry shortly.",
+      ],
+    });
+    if (response.error) return { ok: false, data: null, error: response.error };
+    const data = normalizeDocument(response.result);
+    if (!data)
+      return {
+        ok: false,
+        data: null,
+        error: failure("invalidResponse", "SubBaton settings schema is unsupported."),
+      };
+    if (generation === this.generation)
+      for (const section of data.providers)
+        if (section.ok) this.knownSettings.set(section.provider, section);
+        else this.knownSettings.delete(section.provider);
+    return { ok: true, data, error: null };
+  }
+  async settings(input: unknown): Promise<SettingsResult> {
+    const parsed = settingsGetInput.safeParse(input ?? {});
+    if (!parsed.success)
+      return { ok: false, data: null, error: failure("invalidInput", "Invalid settings request.") };
+    if (parsed.data.fresh) {
+      this.settingsCache = null;
+      this.settingsPending = null;
+    }
+    if (this.settingsCache && this.now() - this.settingsCache.at < 15000)
+      return this.settingsCache.value;
+    if (this.settingsPending) return this.settingsPending;
+    const generation = this.generation;
+    const promise = this.fetchSettings(generation).then((value) => {
+      if (generation === this.generation)
+        this.settingsCache = { value, at: this.now() };
+      return value;
+    });
+    this.settingsPending = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.settingsPending === promise) this.settingsPending = null;
+    }
+  }
+  private async settingsMutation(
+    provider: Provider,
+    argv: string[],
+    outcomes: Record<string, ActionResult>,
+    input?: string,
+  ): Promise<MutationResult> {
+    if (this.mutating)
+      return { result: failure("busy", "Another SubBaton action is still running."), section: null };
+    this.mutating = true;
+    this.invalidate();
+    try {
+      const response = await this.call(argv, 30000, true, {
+        kind: "settings",
+        ...(input === undefined ? {} : { input }),
+      });
+      if (response.error) {
+        if (response.error.code === "revisionConflict") this.knownSettings.delete(provider);
+        return { result: response.error, section: null };
+      }
+      const value = response.result as { outcome?: unknown; settings?: unknown };
+      const result = typeof value.outcome === "string" ? outcomes[value.outcome] : undefined;
+      if (!result) return { result: uncertainSettings(), section: null };
+      if (value.settings === undefined) return { result, section: null };
+      try {
+        const section = normalizeSection(provider, value.settings);
+        this.knownSettings.set(provider, section);
+        return { result, section };
+      } catch {
+        return { result: uncertainSettings(), section: null };
+      }
+    } finally {
+      this.invalidate();
+      this.mutating = false;
+    }
+  }
+  async settingsSet(input: unknown): Promise<MutationResult> {
+    const parsed = settingsSetInput.safeParse(input);
+    if (!parsed.success)
+      return { result: settingsError("invalidSetting"), section: null };
+    const { provider, expectedRevision, changes } = parsed.data;
+    const section = this.knownSettings.get(provider);
+    if (!section) return { result: settingsError("reloadSettings"), section: null };
+    const validation = validateChanges(section, changes);
+    if (!validation.ok) return { result: settingsError(validation.code), section: null };
+    const body = JSON.stringify({
+      changes: validation.changes,
+      expectedRevision: { [provider]: expectedRevision },
+    });
+    if (Buffer.byteLength(body) > 128 * 1024)
+      return { result: settingsError("invalidSetting"), section: null };
+    return this.settingsMutation(
+      provider,
+      ["settings", "set", "--json-input", "-"],
+      { updated: { outcome: "success", code: "updated", message: "Settings saved." } },
+      body,
+    );
+  }
+  async settingsAction(input: unknown): Promise<MutationResult> {
+    const parsed = settingsActionInput.safeParse(input);
+    if (!parsed.success)
+      return { result: failure("invalidInput", "Choose a supported action with the current revision."), section: null };
+    const action = parsed.data;
+    const section = this.knownSettings.get(action.provider);
+    if (!section) return { result: settingsError("reloadSettings"), section: null };
+    if (!section.actions.includes(action.action))
+      return { result: failure("unsupportedAction", "The CLI does not offer this action for this provider."), section: null };
+    if (action.action === "resumeAuto")
+      return this.settingsMutation(
+        action.provider,
+        ["settings", "resume-auto", action.provider, "--expected-revision", action.expectedRevision],
+        {
+          resumed: { outcome: "success", code: "resumed", message: "Automatic switching resumed." },
+          notPaused: { outcome: "unchanged", code: "notPaused", message: "Automatic switching was not paused." },
+        },
+      );
+    if (!section.accounts.some((a) => a.id === action.account))
+      return { result: settingsError("unknownAccount"), section: null };
+    const release = action.action === "releaseQuarantine";
+    return this.settingsMutation(
+      action.provider,
+      [
+        "settings",
+        release ? "release-quarantine" : "release-device-block",
+        action.provider,
+        action.account,
+        "--expected-revision",
+        action.expectedRevision,
+      ],
+      release
+        ? {
+            quarantineReleased: {
+              outcome: "success",
+              code: "quarantineReleased",
+              message:
+                "Quarantine released. This does not validate or renew the login; the official CLI may still require a fresh login on the Mac.",
+            },
+          }
+        : {
+            deviceBlockReleased: {
+              outcome: "success",
+              code: "deviceBlockReleased",
+              message:
+                "Local device block released. The issuer may still refuse this account; no login or retry was performed.",
+            },
+          },
+    );
+  }
+  async pollerStatus(_input?: unknown): Promise<{ ok: boolean; data: PollerStatus | null; error: ActionResult | null }> {
+    const response = await this.call(["poller", "status"], 20000, false, {
+      kind: "poller",
+      unavailable: ["pollerUnavailable", "Poller status could not be read. Retry shortly."],
+    });
+    if (response.error) return { ok: false, data: null, error: response.error };
+    const parsed = pollerStatusSchema.safeParse(response.result);
+    if (!parsed.success)
+      return { ok: false, data: null, error: failure("invalidResponse", "Poller status schema is unsupported.") };
+    return { ok: true, data: parsed.data, error: null };
+  }
+  async pollerLifecycle(input: unknown): Promise<{ result: ActionResult; status: PollerStatus | null }> {
+    const parsed = pollerLifecycleInput.safeParse(input);
+    if (!parsed.success)
+      return { result: failure("invalidInput", "Choose install or uninstall."), status: null };
+    if (this.mutating)
+      return { result: failure("busy", "Another SubBaton action is still running."), status: null };
+    this.mutating = true;
+    this.invalidate();
+    const install = parsed.data.action === "install";
+    try {
+      // Install pins the same canonical binary that just passed the plugin's trust checks.
+      const response = await this.call(
+        (binary) => (install ? ["poller", "install", "--binary", binary] : ["poller", "uninstall"]),
+        120000,
+        true,
+        { kind: "poller" },
+      );
+      if (response.error) return { result: response.error, status: null };
+      const value = response.result as { outcome?: unknown };
+      if (value.outcome !== (install ? "installed" : "uninstalled"))
+        return { result: { outcome: "uncertain", code: "uncertain", message: uncertainMessages.poller }, status: null };
+      const status = pollerStatusSchema.safeParse(response.result);
+      return {
+        result: {
+          outcome: "success",
+          code: install ? "installed" : "uninstalled",
+          message: install
+            ? "Poller installed for the Mac's logged-in user."
+            : "Poller uninstalled. Saved accounts, caches and logs are kept.",
+        },
+        status: status.success ? status.data : null,
+      };
+    } finally {
+      this.invalidate();
+      this.mutating = false;
+    }
+  }
+  async events(input: unknown): Promise<{ ok: boolean; data: { events: SubBatonEvent[] } | null; error: ActionResult | null }> {
+    const parsed = eventsInput.safeParse(input ?? {});
+    if (!parsed.success || (parsed.data.since ?? 0) > 1e11)
+      return { ok: false, data: null, error: failure("invalidInput", "Invalid event time.") };
+    const since = parsed.data.since;
+    const response = await this.call(
+      since === undefined ? ["events"] : ["events", "--since", String(since)],
+      10000,
+      false,
+      { kind: "settings", unavailable: ["eventsUnavailable", "Events could not be read. Retry shortly."] },
+    );
+    if (response.error) return { ok: false, data: null, error: response.error };
+    const events = (response.result as { events?: unknown }).events;
+    if (!Array.isArray(events))
+      return { ok: false, data: null, error: failure("invalidResponse", "Event schema is unsupported.") };
+    const parsedEvents = events.slice(-500).flatMap((event) => {
+      const row = eventSchema.safeParse(event);
+      return row.success ? [row.data] : [];
+    });
+    return { ok: true, data: { events: parsedEvents }, error: null };
+  }
+  async autoPlan(input: unknown): Promise<{ ok: boolean; data: AutoPlan | null; error: ActionResult | null }> {
+    const parsed = autoPlanInput.safeParse(input);
+    if (!parsed.success)
+      return { ok: false, data: null, error: failure("invalidInput", "Choose a provider.") };
+    const provider = parsed.data.provider;
+    const response = await this.call(
+      [...(provider === "claude" ? [] : [provider]), "auto", "plan"],
+      15000,
+      false,
+      { kind: "settings", unavailable: ["planUnavailable", "The automatic plan could not be read. Retry shortly."] },
+    );
+    if (response.error) return { ok: false, data: null, error: response.error };
+    const plan = autoPlanSchema.safeParse(response.result);
+    if (!plan.success)
+      return { ok: false, data: null, error: failure("invalidResponse", "Automatic plan schema is unsupported.") };
+    return { ok: true, data: plan.data, error: null };
+  }
 }
+const uncertainSettings = (): ActionResult => ({
+  outcome: "uncertain",
+  code: "uncertain",
+  message: uncertainMessages.settings,
+});

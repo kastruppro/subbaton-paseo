@@ -55,6 +55,8 @@ export const handoffStateSchema = z.object({
   }),
   /** Newest automaticSwitch event time already handled (Unix seconds). */
   eventWatermark: z.number().finite().nullable().default(null),
+  /** One-time notice, for example after an unreadable state file was set aside. */
+  notice: z.object({ code: z.string().max(64), message: z.string().max(1024) }).nullable().default(null),
 });
 export type HandoffState = z.infer<typeof handoffStateSchema>;
 
@@ -65,8 +67,13 @@ export const handoffSettings = defineSettings({
   schema: z.object({
     /** Reload idle Paseo Codex agents after the poller switched Codex automatically. */
     reloadCodexAfterAutomaticSwitch: z.boolean().default(true),
-    /** Pass --restart-daemon to manual Codex handoffs once every Paseo Codex agent is idle. */
+    /**
+     * Restart the shared Codex daemon once every Paseo Codex agent is idle: --restart-daemon on a
+     * manual handoff, `codex daemon restart` while the CLI marks a restart pending after an automatic switch.
+     */
     restartCodexDaemon: z.boolean().default(false),
+    /** Let an automatic agy switch blocked only by agy sessions close idle Paseo agy agents and reopen them. */
+    closeAgyForAutomaticSwitch: z.boolean().default(true),
     /** How long a handoff waits for running turns before it expires without changes. */
     idleWaitMinutes: z.number().int().min(1).max(240).default(30),
   }),
@@ -82,6 +89,7 @@ export const handoffStatusRpc = defineRpc({
       agy: handoffSchema.nullable(),
     }),
     agentApi: z.boolean(),
+    notice: z.object({ code: z.string().max(64), message: z.string().max(1024) }).nullable(),
   }),
 });
 export const handoffRequestInput = z.object({

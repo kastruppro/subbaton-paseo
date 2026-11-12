@@ -4,7 +4,9 @@ import {
   HandoffCoordinator,
   paseoAgentPort,
   type AgentSnapshot,
+  type AgyProcessInfo,
   type HandoffCli,
+  type SwitchOptions,
   type SwitchOutcome,
 } from "../server/handoff.js";
 import type { HandoffSettings, HandoffState } from "../shared/handoff.js";
@@ -24,18 +26,45 @@ class FakeAgents {
     this.reloads.push(id);
   }
 }
+const paseoPid = 500;
+const proc = (pid: number, ancestors: number[] | null = [paseoPid, 1], kind = "cli", complete = ancestors !== null): AgyProcessInfo => ({ pid, kind, ancestors, complete });
 class FakeCli implements HandoffCli {
-  switches: { provider: string; target: string; flags: string[] }[] = [];
-  processes: { kind: string }[] | null = [];
+  switches: { provider: string; target: string; options: SwitchOptions }[] = [];
+  processes: AgyProcessInfo[] | null = [];
   outcome: SwitchOutcome = { kind: "switched", code: "switched", message: "Switched.", daemonOutcome: "not-requested" };
   events_: { at: number; provider: string; kind: string }[] = [];
   eventReads: (number | null)[] = [];
   gate: Promise<void> | null = null;
+  plan: { ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false } = { ok: true, blockedOnlyByProcesses: false, target: null };
+  planReads = 0;
+  autoRuns: number[][] = [];
+  autoOutcome: SwitchOutcome = { kind: "switched", code: "switched", message: "Automatic switch verified." };
+  daemonPending: boolean | null = false;
+  daemonRestarts = 0;
+  daemonOutcome = "restarted";
+  pendingReads = 0;
+  async agyAutoPlan() {
+    this.planReads++;
+    return this.plan;
+  }
+  async agyAutoRunOnce(pids: number[]) {
+    this.autoRuns.push(pids);
+    return this.autoOutcome;
+  }
+  async codexDaemonPending() {
+    this.pendingReads++;
+    return this.daemonPending;
+  }
+  async codexDaemonRestart() {
+    this.daemonRestarts++;
+    if (this.daemonOutcome === "restarted") this.daemonPending = false;
+    return this.daemonOutcome;
+  }
   async agyProcesses() {
     return this.processes ? { ok: true as const, processes: this.processes } : { ok: false as const };
   }
-  async switchAccount(provider: "codex" | "agy", t: string, flags: string[]) {
-    this.switches.push({ provider, target: t, flags });
+  async switchAccount(provider: "codex" | "agy", t: string, options: SwitchOptions) {
+    this.switches.push({ provider, target: t, options });
     if (this.gate) await this.gate;
     return this.outcome;
   }
@@ -49,28 +78,35 @@ class FakeCli implements HandoffCli {
 }
 class MemoryStore {
   saved: HandoffState | null = null;
-  constructor(public initial: unknown = null) {}
+  setAsideCalls = 0;
+  constructor(public initial: unknown = null, public failLoad = false) {}
   async load() {
+    if (this.failLoad) throw new Error("unreadable");
     return this.initial;
+  }
+  async setAside() {
+    this.setAsideCalls++;
+    return "handoff-v1.json.unreadable-1";
   }
   async save(state: HandoffState) {
     this.saved = structuredClone(state);
   }
 }
-const setup = (settings: Partial<HandoffSettings> = {}, initial: unknown = null) => {
+const setup = (settings: Partial<HandoffSettings> = {}, initial: unknown = null, failLoad = false, options = {}) => {
   const cli = new FakeCli();
   const agents = new FakeAgents();
-  const store = new MemoryStore(initial);
+  const store = new MemoryStore(initial, failLoad);
   let now = 1000;
   const coordinator = new HandoffCoordinator(
     cli,
     store,
-    async () => ({ reloadCodexAfterAutomaticSwitch: true, restartCodexDaemon: false, idleWaitMinutes: 30, ...settings }),
+    async () => ({ reloadCodexAfterAutomaticSwitch: true, restartCodexDaemon: false, closeAgyForAutomaticSwitch: true, idleWaitMinutes: 30, ...settings }),
     () => now,
     (() => {
       let n = 0;
       return () => `h${++n}`;
     })(),
+    { paseoPids: [paseoPid, 400], ...options },
   );
   return { cli, agents, store, coordinator, advance: (s: number) => (now += s) };
 };
@@ -78,7 +114,7 @@ const setup = (settings: Partial<HandoffSettings> = {}, initial: unknown = null)
 test("agy: waits for idle, stops only via the CLI, switches, then reloads only the affected agy agents", async () => {
   const { cli, agents, coordinator } = setup();
   agents.agents = [agent("a1", "antigravity"), agent("a2", "antigravity", "running", true), agent("c1", "codex"), agent("k1", "claude", "running", true)];
-  cli.processes = [{ kind: "cli" }, { kind: "cli" }];
+  cli.processes = [proc(12), proc(11, [700, 400, 1])];
   assert.equal((await coordinator.request("agy", target)).result.outcome, "success");
   await coordinator.tick(agents);
   assert.equal(coordinator.status().handoffs.agy?.phase, "waiting");
@@ -87,23 +123,32 @@ test("agy: waits for idle, stops only via the CLI, switches, then reloads only t
   assert.deepEqual(agents.reloads, []);
   agents.agents[1] = agent("a2", "antigravity");
   await coordinator.tick(agents);
-  assert.deepEqual(cli.switches, [{ provider: "agy", target, flags: ["--stop-agy"] }]);
+  assert.deepEqual(cli.switches, [{ provider: "agy", target, options: { onlyPids: [11, 12] } }]);
   assert.deepEqual(agents.reloads, ["a1", "a2"]);
   const h = coordinator.status().handoffs.agy!;
   assert.equal(h.phase, "done");
   assert.deepEqual(h.affected, ["a1", "a2"]);
 });
 
-test("agy: sessions outside Paseo block the handoff instead of being stopped", async () => {
-  for (const processes of [[{ kind: "cli" }, { kind: "cli" }], [{ kind: "desktop" }], null]) {
+test("agy: only processes descended from the Paseo daemon count; anything else waits (fail closed)", async () => {
+  const cases: [AgentSnapshot[], AgyProcessInfo[] | null, string][] = [
+    [[agent("a1", "antigravity")], [proc(11), proc(12, [900, 1])], "agyOutsidePaseo"],
+    [[agent("a1", "antigravity")], [proc(11, [900, 1], "desktop")], "agyOutsidePaseo"],
+    [[agent("a1", "antigravity")], null, "processUnknown"],
+    [[agent("a1", "antigravity")], [proc(11, null)], "attributionUnknown"],
+    // Review H1: two idle agents, one Paseo process and one terminal session must not be stopped.
+    [[agent("a1", "antigravity"), agent("a2", "antigravity")], [proc(11), proc(12, [900, 1])], "agyOutsidePaseo"],
+    [[agent("a1", "antigravity"), agent("a2", "antigravity")], [proc(11)], "attributionIncomplete"],
+  ];
+  for (const [list, processes, code] of cases) {
     const { cli, agents, coordinator } = setup();
-    agents.agents = [agent("a1", "antigravity")];
+    agents.agents = list;
     cli.processes = processes;
     await coordinator.request("agy", target);
     await coordinator.tick(agents);
     const h = coordinator.status().handoffs.agy!;
-    assert.equal(h.phase, "waiting");
-    assert.equal(h.code, processes ? "agyOutsidePaseo" : "processUnknown");
+    assert.equal(h.phase, "waiting", code);
+    assert.equal(h.code, code);
     assert.equal(cli.switches.length, 0);
   }
 });
@@ -113,7 +158,7 @@ test("agy without running processes switches without --stop-agy", async () => {
   cli.processes = [];
   await coordinator.request("agy", target);
   await coordinator.tick(agents);
-  assert.deepEqual(cli.switches[0]?.flags, []);
+  assert.deepEqual(cli.switches[0]?.options, {});
   assert.equal(coordinator.status().handoffs.agy?.phase, "done");
 });
 
@@ -121,7 +166,7 @@ test("uncertain, refused and stopped-but-failed switches never reopen; an explic
   for (const kind of ["uncertain", "refused", "stoppedFailed"] as const) {
     const { cli, agents, coordinator } = setup();
     agents.agents = [agent("a1", "antigravity")];
-    cli.processes = [{ kind: "cli" }];
+    cli.processes = [proc(11)];
     cli.outcome = { kind, code: kind === "refused" ? "needsLogin" : kind, message: "CLI said no." };
     await coordinator.request("agy", target);
     await coordinator.tick(agents);
@@ -130,6 +175,8 @@ test("uncertain, refused and stopped-but-failed switches never reopen; an explic
     assert.deepEqual(agents.reloads, []);
     if (kind === "refused") {
       assert.match(h.message, /No agents were closed/);
+      assert.deepEqual(h.affected, []);
+      assert.equal((await coordinator.control("agy", "reopen")).result.code, "nothingToReopen");
       continue;
     }
     assert.match(h.message, /Reopen agents/);
@@ -147,7 +194,7 @@ test("codex: reloads idle Codex agents after a verified switch; daemon restart o
     cli.outcome = { kind: "switched", code: "switched", message: "ok", daemonOutcome: restart ? "restarted" : "not-requested" };
     await coordinator.request("codex", target);
     await coordinator.tick(agents);
-    assert.deepEqual(cli.switches[0]?.flags, restart ? ["--restart-daemon"] : []);
+    assert.deepEqual(cli.switches[0]?.options, restart ? { restartDaemon: true } : {});
     assert.deepEqual(agents.reloads, ["c1"]);
     assert.equal(coordinator.status().handoffs.codex?.daemonOutcome, restart ? "restarted" : "not-requested");
   }
@@ -185,9 +232,11 @@ test("reload failures and vanished agents are reported, not retried forever", as
   agents.agents = [agent("c1", "codex"), agent("c2", "codex")];
   agents.failReload.add("c1");
   await coordinator.request("codex", target);
-  const original = agents.list.bind(agents);
-  let calls = 0;
-  agents.list = async () => (++calls === 2 ? (await original()).filter((a) => a.id !== "c2") : original());
+  const reload = agents.reload.bind(agents);
+  agents.reload = async (id) => {
+    agents.agents = agents.agents.filter((a) => a.id !== "c2");
+    return reload(id);
+  };
   await coordinator.tick(agents);
   const h = coordinator.status().handoffs.codex!;
   assert.equal(h.phase, "failed");
@@ -211,7 +260,7 @@ test("single flight: one handoff per provider and concurrent ticks never switch 
   assert.deepEqual(agents.reloads, ["c1"]);
 });
 
-test("waiting expires after the idle window without changing anything; cancel works only while waiting", async () => {
+test("waiting expires after the idle window without changing anything; cancel works only while waiting or reopening", async () => {
   const { cli, agents, coordinator, advance } = setup({ idleWaitMinutes: 1 });
   agents.agents = [agent("a1", "antigravity", "running", true)];
   await coordinator.request("agy", target);
@@ -223,7 +272,7 @@ test("waiting expires after the idle window without changing anything; cancel wo
   await coordinator.request("agy", target);
   assert.equal((await coordinator.control("agy", "cancel")).result.outcome, "success");
   assert.equal(coordinator.status().handoffs.agy?.phase, "cancelled");
-  assert.equal((await coordinator.control("agy", "cancel")).result.code, "notWaiting");
+  assert.equal((await coordinator.control("agy", "cancel")).result.code, "notCancellable");
 });
 
 test("without Paseo's agent API nothing is switched or reopened", async () => {
@@ -348,3 +397,221 @@ test("the Paseo adapter lists non-archived agents and reopens with reload(), nev
   assert.equal(paseoAgentPort(null), null);
   assert.equal(paseoAgentPort({}), null);
 });
+
+test("L1: an agent that turns busy after the process check sends the handoff back to waiting", async () => {
+  const { cli, agents, coordinator } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [proc(11)];
+  const original = agents.list.bind(agents);
+  let calls = 0;
+  agents.list = async () => (++calls === 2 ? [agent("a1", "antigravity", "running", true)] : original());
+  await coordinator.request("agy", target);
+  await coordinator.tick(agents);
+  assert.equal(cli.switches.length, 0);
+  const h = coordinator.status().handoffs.agy!;
+  assert.equal(h.phase, "waiting");
+  assert.equal(h.code, "becameBusy");
+  await coordinator.tick(agents);
+  assert.equal(cli.switches.length, 1);
+});
+
+test("M1: each agent is re-read right before its reload; one that turned busy meanwhile waits", async () => {
+  const { agents, coordinator } = setup();
+  agents.agents = [agent("c1", "codex"), agent("c2", "codex")];
+  const reload = agents.reload.bind(agents);
+  agents.reload = async (id) => {
+    await reload(id);
+    if (id === "c1") agents.agents[1] = agent("c2", "codex", "running", true);
+  };
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads, ["c1"]);
+  assert.equal(coordinator.status().handoffs.codex?.code, "reopenWaiting");
+  agents.agents[1] = agent("c2", "codex");
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads, ["c1", "c2"]);
+});
+
+test("L2: ticks coalesce, stuck SDK calls time out and owner actions answer busy quickly", async () => {
+  const { agents, coordinator } = setup({}, null, false, { listTimeoutMs: 30, fastWaitMs: 10 });
+  await coordinator.request("codex", target);
+  let lists = 0;
+  agents.list = () => {
+    lists++;
+    return new Promise(() => {});
+  };
+  const ticks = Array.from({ length: 5 }, () => coordinator.tick(agents));
+  const answer = await coordinator.control("codex", "cancel");
+  assert.equal(answer.result.code, "busy");
+  await Promise.all(ticks);
+  assert.ok(lists <= 2, `lists ${lists}`);
+  assert.equal(coordinator.status().handoffs.codex?.code, "agentApiUnavailable");
+  assert.equal(coordinator.status().handoffs.codex?.phase, "waiting");
+});
+
+test("L3: an unreadable state file is set aside and reported once", async () => {
+  const { agents, coordinator, store } = setup({}, null, true);
+  await coordinator.tick(agents);
+  assert.equal(store.setAsideCalls, 1);
+  assert.match(coordinator.status().notice?.message ?? "", /may have been interrupted/);
+  await coordinator.request("codex", target);
+  await coordinator.control("codex", "cancel");
+  await coordinator.control("codex", "dismiss");
+  assert.equal(coordinator.status().notice, null);
+  assert.equal(coordinator.status().handoffs.codex?.phase, "cancelled", "the notice is dismissed on its own");
+  const future = setup({}, { schemaVersion: 2, handoffs: {} });
+  await future.coordinator.tick(future.agents);
+  assert.equal(future.store.setAsideCalls, 1);
+  assert.equal(future.coordinator.status().notice?.code, "stateUnreadable");
+});
+
+test("L5: reopening has a deadline and can be cancelled; closed agy agents stay reopenable", async () => {
+  const { cli, agents, coordinator, advance } = setup({ idleWaitMinutes: 1 });
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [proc(11)];
+  const original = cli.switchAccount.bind(cli);
+  cli.switchAccount = async (p, t, o) => {
+    agents.agents[0] = agent("a1", "antigravity", "running", true);
+    return original(p, t, o);
+  };
+  await coordinator.request("agy", target);
+  await coordinator.tick(agents);
+  assert.equal(coordinator.status().handoffs.agy?.phase, "reopening");
+  advance(61);
+  await coordinator.tick(agents);
+  const h = coordinator.status().handoffs.agy!;
+  assert.equal(h.phase, "failed");
+  assert.equal(h.code, "reopenTimeout");
+  assert.equal((await coordinator.control("agy", "reopen")).result.outcome, "success");
+  assert.equal((await coordinator.control("agy", "cancel")).result.outcome, "success");
+  assert.equal(coordinator.status().handoffs.agy?.code, "reopenCancelled");
+  assert.equal(coordinator.status().handoffs.agy?.phase, "failed");
+});
+
+test("agy: an incomplete ancestor chain without the Paseo PID is unattributable; a refused allowlist waits", async () => {
+  const { cli, agents, coordinator } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [proc(11), proc(12, [900], "cli", false)];
+  await coordinator.request("agy", target);
+  await coordinator.tick(agents);
+  assert.equal(coordinator.status().handoffs.agy?.code, "attributionUnknown");
+  cli.processes = [proc(11), proc(12, [900, paseoPid, 1], "cli", false)];
+  cli.outcome = { kind: "notAllowed", code: "processesNotAllowed", message: "x" };
+  await coordinator.tick(agents);
+  assert.deepEqual(cli.switches.at(-1)?.options, { onlyPids: [11, 12] });
+  const h = coordinator.status().handoffs.agy!;
+  assert.equal(h.phase, "waiting");
+  assert.equal(h.code, "agyOutsidePaseo");
+  assert.deepEqual(h.affected, []);
+});
+
+test("automatic agy: runs auto run-once with Paseo's PIDs only when processes are the only blocker", async () => {
+  const { cli, agents, coordinator, advance } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [proc(11)];
+  await coordinator.tick(agents);
+  assert.equal(cli.autoRuns.length, 0);
+  assert.equal(coordinator.status().handoffs.agy, null);
+  cli.plan = { ok: true, blockedOnlyByProcesses: true, target };
+  advance(61);
+  await coordinator.tick(agents);
+  assert.deepEqual(cli.autoRuns, [[11]]);
+  assert.equal(cli.switches.length, 0);
+  const h = coordinator.status().handoffs.agy!;
+  assert.equal(h.trigger, "automaticSwitch");
+  assert.equal(h.targetAlias, "home");
+  assert.equal(h.phase, "done");
+  assert.deepEqual(agents.reloads, ["a1"]);
+});
+
+test("automatic agy: off by setting, terminal sessions wait, refusals close nothing, a failed stop honours retryAt", async () => {
+  const off = setup({ closeAgyForAutomaticSwitch: false });
+  off.cli.plan = { ok: true, blockedOnlyByProcesses: true, target };
+  await off.coordinator.tick(off.agents);
+  assert.equal(off.cli.planReads, 0);
+
+  const { cli, agents, coordinator, advance } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.plan = { ok: true, blockedOnlyByProcesses: true, target };
+  cli.processes = [proc(11), proc(12, [900, 1])];
+  await coordinator.tick(agents);
+  assert.equal(coordinator.status().handoffs.agy?.code, "agyOutsidePaseo");
+  assert.equal(cli.autoRuns.length, 0);
+  await coordinator.control("agy", "cancel");
+
+  cli.processes = [proc(11)];
+  cli.autoOutcome = { kind: "notRun", code: "processStopRefused", message: "The automatic switch did not run. Nothing was stopped." };
+  advance(61);
+  await coordinator.tick(agents);
+  let h = coordinator.status().handoffs.agy!;
+  assert.equal(h.phase, "done");
+  assert.deepEqual(h.affected, []);
+  assert.equal((await coordinator.control("agy", "reopen")).result.code, "nothingToReopen");
+
+  cli.autoOutcome = { kind: "stoppedFailed", code: "stopFailed", message: "Some agy sessions did not stop.", retryAt: 1000 + 122 + 900 };
+  advance(61);
+  await coordinator.tick(agents);
+  h = coordinator.status().handoffs.agy!;
+  assert.equal(h.phase, "failed");
+  assert.deepEqual(h.affected, ["a1"]);
+  await coordinator.control("agy", "dismiss");
+  const reads = cli.planReads;
+  advance(120);
+  await coordinator.tick(agents);
+  assert.equal(cli.planReads, reads, "no plan read before retryAt");
+  advance(900);
+  await coordinator.tick(agents);
+  assert.equal(cli.planReads, reads + 1);
+});
+
+test("Codex daemon: restarted at the idle boundary after an automatic switch, never while a turn runs", async () => {
+  const { cli, agents, coordinator, advance } = setup({ restartCodexDaemon: true });
+  agents.agents = [agent("c1", "codex", "running", true)];
+  cli.daemonPending = true;
+  cli.events_ = [{ at: 2000, provider: "codex", kind: "automaticSwitch" }];
+  await coordinator.tick(agents);
+  assert.equal(coordinator.status().handoffs.codex?.restartDaemon, true);
+  assert.equal(cli.daemonRestarts, 0);
+  agents.agents = [agent("c1", "codex")];
+  // A turn starts between the idle check and the restart: no restart.
+  const list = agents.list.bind(agents);
+  let calls = 0;
+  agents.list = async () => (++calls === 2 ? [agent("c1", "codex", "running", true)] : list());
+  await coordinator.tick(agents);
+  assert.equal(cli.daemonRestarts, 0);
+  assert.equal(coordinator.status().handoffs.codex?.code, "turnRunning");
+  agents.list = list;
+  await coordinator.tick(agents);
+  assert.equal(cli.daemonRestarts, 1);
+  const h = coordinator.status().handoffs.codex!;
+  assert.equal(h.daemonOutcome, "restarted");
+  assert.deepEqual(agents.reloads, ["c1"]);
+  assert.equal(h.phase, "done");
+  advance(61);
+  await coordinator.tick(agents);
+  assert.equal(cli.daemonRestarts, 1, "cleared flag: no second restart");
+});
+
+test("Codex daemon: a pending flag without an event is picked up; a failed restart is not retried for 15 minutes", async () => {
+  const { cli, agents, coordinator, advance } = setup({ restartCodexDaemon: true, reloadCodexAfterAutomaticSwitch: false });
+  agents.agents = [agent("c1", "codex")];
+  cli.daemonPending = true;
+  cli.daemonOutcome = "failed";
+  await coordinator.tick(agents);
+  assert.equal(cli.daemonRestarts, 1);
+  const h = coordinator.status().handoffs.codex!;
+  assert.equal(h.daemonOutcome, "failed");
+  assert.deepEqual(agents.reloads, []);
+  assert.match(h.message, /did not complete/);
+  advance(61);
+  await coordinator.tick(agents);
+  assert.equal(cli.daemonRestarts, 1);
+  advance(900);
+  await coordinator.tick(agents);
+  assert.equal(cli.daemonRestarts, 2);
+  const quiet = setup();
+  quiet.cli.daemonPending = true;
+  await quiet.coordinator.tick(quiet.agents);
+  assert.equal(quiet.cli.pendingReads, 0, "setting off: never read or restarted");
+});
+

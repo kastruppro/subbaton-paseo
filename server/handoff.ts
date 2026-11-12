@@ -28,23 +28,74 @@ export interface AgentPort {
   list(): Promise<AgentSnapshot[]>;
   reload(id: string): Promise<void>;
 }
-export type SwitchKind = "switched" | "unchanged" | "refused" | "stoppedFailed" | "uncertain" | "busy";
+/** notAllowed: an agy process outside the --only-pids list ran, nothing changed. notRun: auto run-once did nothing. */
+export type SwitchKind = "switched" | "unchanged" | "refused" | "notAllowed" | "notRun" | "stoppedFailed" | "uncertain" | "busy";
 export interface SwitchOutcome {
   kind: SwitchKind;
   code: string;
   message: string;
   daemonOutcome?: string | null;
+  /** agy auto run-once: the CLI's 15-minute hold after a failed stop (Unix seconds). */
+  retryAt?: number;
+}
+/** One agy process as the CLI reports it; ancestors is null when the CLI gives no ancestry. */
+export interface AgyProcessInfo {
+  pid: number;
+  kind: string;
+  /** Parent first, up to launchd. */
+  ancestors: number[] | null;
+  /** True only when the chain reached PID 1, so a missing Paseo PID really means "not Paseo's". */
+  complete: boolean;
+}
+export interface SwitchOptions {
+  /** agy: stop exactly these PIDs (all of them Paseo's); the CLI refuses if any other agy runs. */
+  onlyPids?: number[];
+  /** Codex: pass --restart-daemon. */
+  restartDaemon?: boolean;
 }
 export interface HandoffCli {
-  agyProcesses(): Promise<{ ok: true; processes: { kind: string }[] } | { ok: false }>;
-  switchAccount(provider: HandoffProvider, target: string, flags: string[]): Promise<SwitchOutcome>;
+  agyProcesses(): Promise<{ ok: true; processes: AgyProcessInfo[] } | { ok: false }>;
+  switchAccount(provider: HandoffProvider, target: string, options: SwitchOptions): Promise<SwitchOutcome>;
   events(since: number | null): Promise<{ ok: true; events: { at: number; provider: string; kind: string }[] } | { ok: false }>;
   knownAccount(provider: HandoffProvider, target: string): { alias: string } | null;
+  /** agy auto plan: whether running agy processes are the only blocker of an automatic switch. */
+  agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false }>;
+  /** agy auto run-once --stop-agy --only-pids. */
+  agyAutoRunOnce(onlyPids: number[]): Promise<SwitchOutcome>;
+  /** codex processes daemonRestartPending; null when unknown. */
+  codexDaemonPending(): Promise<boolean | null>;
+  /** codex daemon restart: restarted, failed, pending, unknown or busy. */
+  codexDaemonRestart(): Promise<string>;
 }
 export interface HandoffStore {
   load(): Promise<unknown | null>;
   save(state: HandoffState): Promise<void>;
+  /** Moves an unreadable or unsupported state file aside; returns its new name. */
+  setAside?(): Promise<string | null>;
 }
+export interface CoordinatorOptions {
+  /** The Paseo daemon side of the process tree: this plugin process and its parent. */
+  paseoPids?: number[];
+  listTimeoutMs?: number;
+  reloadTimeoutMs?: number;
+  /** How long request/control wait for a running step before answering busy. */
+  fastWaitMs?: number;
+}
+const withTimeout = <T>(work: Promise<T>, ms: number): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    (timer as { unref?: () => void }).unref?.();
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 
 const busyStatus = (a: AgentSnapshot) => a.activeTurn || a.status === "running" || a.status === "initializing";
 const terminal = (h: Handoff | null) => !h || !(activePhases as readonly string[]).includes(h.phase);
@@ -52,11 +103,21 @@ const ok = (code: string, message: string): ActionResult => ({ outcome: "success
 const refuse = (code: string, message: string): ActionResult => ({ outcome: "error", code, message });
 
 export class HandoffCoordinator {
-  private state: HandoffState = { schemaVersion: 1, handoffs: { codex: null, agy: null }, eventWatermark: null };
+  private state: HandoffState = { schemaVersion: 1, handoffs: { codex: null, agy: null }, eventWatermark: null, notice: null };
   private ready: Promise<void> | null = null;
   private chain: Promise<unknown> = Promise.resolve();
   private lastEventPoll = -Infinity;
+  private lastAgyPlan = -Infinity;
+  private agyRetryAt = -Infinity;
+  private lastDaemonAttempt = -Infinity;
+  private queuedTick: Promise<void> | null = null;
+  private tickPort: AgentPort | null = null;
+  private running = false;
   agentApiSeen = false;
+  private paseoPids: number[];
+  private listTimeoutMs: number;
+  private reloadTimeoutMs: number;
+  private fastWaitMs: number;
 
   constructor(
     private cli: HandoffCli,
@@ -64,20 +125,41 @@ export class HandoffCoordinator {
     private settings: () => Promise<HandoffSettings>,
     private now: () => number = () => Date.now() / 1000,
     private newId: () => string = () => crypto.randomUUID(),
-  ) {}
+    options: CoordinatorOptions = {},
+  ) {
+    this.paseoPids = (options.paseoPids ?? [process.pid, process.ppid]).filter((pid) => Number.isInteger(pid) && pid > 1);
+    this.listTimeoutMs = options.listTimeoutMs ?? 10_000;
+    this.reloadTimeoutMs = options.reloadTimeoutMs ?? 60_000;
+    this.fastWaitMs = options.fastWaitMs ?? 2_000;
+  }
 
   /** Loads persisted state once. A handoff interrupted while the CLI switch ran becomes uncertain. */
   init(): Promise<void> {
     this.ready ??= (async () => {
       let raw: unknown = null;
+      let unreadable = false;
       try {
         raw = await this.store.load();
       } catch {
-        raw = null;
+        unreadable = true;
       }
       const parsed = handoffStateSchema.safeParse(raw);
       if (parsed.success) this.state = parsed.data;
       let changed = !parsed.success && raw !== null;
+      if (unreadable || (!parsed.success && raw !== null)) {
+        // Review L3: never interpret it, but keep it and tell the owner a handoff may have been cut off.
+        let kept: string | null = null;
+        try {
+          kept = (await this.store.setAside?.()) ?? null;
+        } catch {
+          kept = null;
+        }
+        this.state.notice = {
+          code: "stateUnreadable",
+          message: `The saved handoff state could not be read${kept ? ` and was kept as ${kept}` : ""}. A handoff may have been interrupted: check the active Codex/agy account with the SubBaton CLI on the Mac and reopen closed agents from Paseo if needed.`,
+        };
+        changed = true;
+      }
       for (const provider of handoffProviders) {
         const h = this.state.handoffs[provider];
         if (h?.phase === "switching") {
@@ -106,20 +188,52 @@ export class HandoffCoordinator {
   }
   /** Serialises every state change: single flight per provider and across ticks/requests. */
   private serial<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.chain.then(() => this.init()).then(work);
+    const run = this.chain
+      .then(() => this.init())
+      .then(async () => {
+        this.running = true;
+        try {
+          return await work();
+        } finally {
+          this.running = false;
+        }
+      });
     this.chain = run.catch(() => undefined);
+    return run;
+  }
+  /** Owner actions answer busy instead of hanging behind a long or stuck step (review L2). */
+  private async fast<T>(work: () => Promise<T>, busy: T): Promise<T> {
+    let abandoned = false;
+    let started = false;
+    const run = this.serial(async () => {
+      if (abandoned) return busy;
+      started = true;
+      return work();
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wait = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), this.fastWaitMs);
+      (timer as { unref?: () => void }).unref?.();
+    });
+    const first = await Promise.race([run, wait]);
+    clearTimeout(timer);
+    if (first === "timeout" && !started) {
+      abandoned = true;
+      return busy;
+    }
     return run;
   }
 
   status() {
-    return { handoffs: { ...this.state.handoffs }, agentApi: this.agentApiSeen };
+    return { handoffs: { ...this.state.handoffs }, agentApi: this.agentApiSeen, notice: this.state.notice };
   }
   hasActive() {
     return handoffProviders.some((p) => !terminal(this.state.handoffs[p]));
   }
 
   request(provider: HandoffProvider, target: string): Promise<{ result: ActionResult; handoff: Handoff | null }> {
-    return this.serial(async () => {
+    const busy = { result: refuse("busy", "The handoff coordinator is busy (a switch or reopen is running). Retry shortly."), handoff: this.state.handoffs[provider] };
+    return this.fast(async () => {
       const current = this.state.handoffs[provider];
       if (!terminal(current))
         return { result: refuse("busy", "A handoff for this provider is already in progress."), handoff: current };
@@ -150,23 +264,36 @@ export class HandoffCoordinator {
       this.state.handoffs[provider] = handoff;
       await this.persist();
       return { result: ok("queued", "The switch runs as soon as every affected Paseo agent is idle."), handoff };
-    });
+    }, busy);
   }
 
   control(provider: HandoffProvider, action: "cancel" | "reopen" | "dismiss") {
-    return this.serial(async () => {
+    const busy = { result: refuse("busy", "The handoff coordinator is busy (a switch or reopen is running). Retry shortly."), handoff: this.state.handoffs[provider] };
+    return this.fast(async () => {
       const h = this.state.handoffs[provider];
+      if (action === "dismiss" && this.state.notice) {
+        // The notice is dismissed on its own; a finished handoff needs its own Dismiss.
+        this.state.notice = null;
+        await this.persist();
+        return { result: ok("dismissed", "Cleared."), handoff: h };
+      }
       if (!h) return { result: refuse("noHandoff", "There is no handoff for this provider."), handoff: null };
       if (action === "cancel") {
-        if (h.phase !== "waiting")
-          return { result: refuse("notWaiting", "Only a handoff that is still waiting can be cancelled."), handoff: h };
-        this.update(h, { phase: "cancelled", code: "cancelled", message: "Cancelled before anything changed." });
+        if (h.phase === "waiting") this.update(h, { phase: "cancelled", code: "cancelled", message: "Cancelled before anything changed." });
+        else if (h.phase === "reopening") {
+          const closed = h.provider === "agy" && h.affected.some((id) => !h.reopened.includes(id));
+          this.update(h, {
+            phase: closed ? "failed" : "cancelled",
+            code: "reopenCancelled",
+            message: closed ? `Reopening cancelled; ${h.affected.length - h.reopened.length} agy agents stay closed. Use Reopen agents when ready.` : "Reopening cancelled; the remaining agents keep their current session.",
+          });
+        } else return { result: refuse("notCancellable", "Only a waiting or reopening handoff can be cancelled."), handoff: h };
       } else if (action === "reopen") {
         const pending = h.affected.filter((id) => !h.reopened.includes(id));
         if (!["uncertain", "failed"].includes(h.phase) || pending.length === 0)
           return { result: refuse("nothingToReopen", "No closed agents are waiting to be reopened."), handoff: h };
         // Explicit owner decision after inspecting the login on the Mac.
-        this.update(h, { phase: "reopening", failedReopen: [], code: "reopenRequested", message: "Reopening the closed agents as requested." });
+        this.update(h, { phase: "reopening", failedReopen: [], deadline: this.now() + (await this.settings()).idleWaitMinutes * 60, code: "reopenRequested", message: "Reopening the closed agents as requested." });
       } else {
         if (!terminal(h)) return { result: refuse("active", "A running handoff cannot be dismissed; cancel it while it waits."), handoff: h };
         this.state.handoffs[provider] = null;
@@ -175,14 +302,20 @@ export class HandoffCoordinator {
       }
       await this.persist();
       return { result: ok(action, h.message), handoff: h };
-    });
+    }, busy);
   }
 
   /** One coordination step for every provider. Without an agent API nothing is switched or reopened. */
-  tick(agents: AgentPort | null): Promise<void> {
-    return this.serial(async () => {
+  tick(port: AgentPort | null): Promise<void> {
+    // Review L2: at most one queued tick; it uses the newest agent API offered meanwhile.
+    if (port) this.tickPort = port;
+    if (this.queuedTick) return this.queuedTick;
+    const queued = this.serial(async () => {
+      this.queuedTick = null;
+      const agents = this.guard(this.tickPort ?? port);
       if (agents) this.agentApiSeen = true;
       await this.pollEvents();
+      if (agents) await this.pollAgyAuto();
       for (const provider of handoffProviders) {
         const h = this.state.handoffs[provider];
         if (!h || terminal(h)) continue;
@@ -195,29 +328,93 @@ export class HandoffCoordinator {
         await this.persist();
       }
     });
+    this.queuedTick = queued;
+    queued.catch(() => undefined).finally(() => {
+      if (this.queuedTick === queued) this.queuedTick = null;
+    });
+    return queued;
+  }
+  isRunning() {
+    return this.running;
+  }
+  /** Bounds every SDK call so a stale PaseoApi cannot stall the coordinator. */
+  private guard(port: AgentPort | null): AgentPort | null {
+    if (!port) return null;
+    return {
+      list: () => withTimeout(port.list(), this.listTimeoutMs),
+      reload: (id) => withTimeout(port.reload(id), this.reloadTimeoutMs),
+    };
   }
 
-  private async pollEvents() {
-    if (this.now() - this.lastEventPoll < 60 || !terminal(this.state.handoffs.codex)) return;
-    const settings = await this.settings();
-    if (!settings.reloadCodexAfterAutomaticSwitch) return;
-    this.lastEventPoll = this.now();
-    const read = await this.cli.events(this.state.eventWatermark);
-    if (!read.ok) return;
-    const watermark = this.state.eventWatermark ?? 0;
-    const fresh = read.events.filter((e) => e.at > watermark);
-    if (fresh.length === 0) return;
-    this.state.eventWatermark = Math.max(...fresh.map((e) => e.at));
-    if (!fresh.some((e) => e.provider === "codex" && e.kind === "automaticSwitch")) {
-      await this.persist();
-      return;
-    }
+  /** A reload-only Codex handoff after an automatic switch; optionally restarts the shared daemon. */
+  private automaticCodex(settings: HandoffSettings, code: string, message: string): Handoff {
     const now = this.now();
-    this.state.handoffs.codex = {
+    return {
       id: this.newId(),
       provider: "codex",
       target: null,
       targetAlias: null,
+      trigger: "automaticSwitch",
+      restartDaemon: settings.restartCodexDaemon,
+      phase: "waiting",
+      requestedAt: now,
+      deadline: now + settings.idleWaitMinutes * 60,
+      updatedAt: now,
+      waitingFor: 0,
+      code,
+      message,
+      affected: [],
+      reopened: [],
+      failedReopen: [],
+      daemonOutcome: null,
+    };
+  }
+  private async pollEvents() {
+    if (this.now() - this.lastEventPoll < 60 || !terminal(this.state.handoffs.codex)) return;
+    const settings = await this.settings();
+    if (!settings.reloadCodexAfterAutomaticSwitch && !settings.restartCodexDaemon) return;
+    this.lastEventPoll = this.now();
+    const read = await this.cli.events(this.state.eventWatermark);
+    if (read.ok) {
+      const watermark = this.state.eventWatermark ?? 0;
+      const fresh = read.events.filter((e) => e.at > watermark);
+      if (fresh.length > 0) {
+        this.state.eventWatermark = Math.max(...fresh.map((e) => e.at));
+        if (fresh.some((e) => e.provider === "codex" && e.kind === "automaticSwitch")) {
+          this.state.handoffs.codex = this.automaticCodex(
+            settings,
+            "queued",
+            "Codex switched automatically. Waiting until Paseo Codex agents are idle to pick up the new login.",
+          );
+        }
+        await this.persist();
+        if (this.state.handoffs.codex && !terminal(this.state.handoffs.codex)) return;
+      }
+    }
+    // A restart the CLI still marks as pending (for example one missed while Paseo was closed).
+    // A failed attempt is not retried for 15 minutes, so a broken daemon is not restarted every minute.
+    if (!settings.restartCodexDaemon || this.now() - this.lastDaemonAttempt < 900) return;
+    if ((await this.cli.codexDaemonPending()) !== true) return;
+    this.state.handoffs.codex = { ...this.automaticCodex(settings, "daemonPending", "A Codex daemon restart is pending after an automatic switch. Waiting until Paseo Codex agents are idle."), restartDaemon: true };
+    await this.persist();
+  }
+  /**
+   * Automatic agy: when running agy sessions are the only thing blocking the poller's automatic
+   * switch, run it with --stop-agy limited to Paseo's own idle sessions, then reopen them.
+   */
+  private async pollAgyAuto() {
+    if (this.now() - this.lastAgyPlan < 60 || this.now() < this.agyRetryAt || !terminal(this.state.handoffs.agy)) return;
+    const settings = await this.settings();
+    if (!settings.closeAgyForAutomaticSwitch) return;
+    this.lastAgyPlan = this.now();
+    const plan = await this.cli.agyAutoPlan();
+    if (!plan.ok || !plan.blockedOnlyByProcesses || !plan.target) return;
+    const now = this.now();
+    this.state.handoffs.agy = {
+      id: this.newId(),
+      provider: "agy",
+      target: plan.target,
+      targetAlias: this.cli.knownAccount("agy", plan.target)?.alias ?? null,
       trigger: "automaticSwitch",
       restartDaemon: false,
       phase: "waiting",
@@ -226,7 +423,7 @@ export class HandoffCoordinator {
       updatedAt: now,
       waitingFor: 0,
       code: "queued",
-      message: "Codex switched automatically. Waiting until Paseo Codex agents are idle to reload them with the new login.",
+      message: "An automatic agy switch is waiting only for running agy sessions. Waiting until Paseo agy agents are idle.",
       affected: [],
       reopened: [],
       failedReopen: [],
@@ -249,7 +446,7 @@ export class HandoffCoordinator {
       return;
     }
     if (h.phase === "waiting") await this.waitAndSwitch(h, agents);
-    if (h.phase === "reopening") await this.reopen(h, agents);
+    if (h.phase === "reopening") await this.reopen(h, agents, await this.settings());
   }
 
   private async waitAndSwitch(h: Handoff, agents: AgentPort) {
@@ -263,19 +460,60 @@ export class HandoffCoordinator {
       });
       return;
     }
-    const affected = mine.filter((a) => a.status === "idle").map((a) => a.id);
+    let affected = mine.filter((a) => a.status === "idle").map((a) => a.id);
     if (h.target === null) {
-      this.update(h, { phase: affected.length ? "reopening" : "done", affected, waitingFor: 0, code: affected.length ? "reloading" : "nothingToReload", message: affected.length ? "Reloading idle Codex agents with the new login." : "No Paseo Codex agents needed a reload." });
+      const settings = await this.settings();
+      if (!settings.reloadCodexAfterAutomaticSwitch) affected = [];
+      let daemonOutcome = h.daemonOutcome;
+      if (h.restartDaemon) {
+        // Every Paseo Codex agent is idle: the idle boundary for the shared daemon.
+        const pending = await this.cli.codexDaemonPending();
+        // The CLI does not check for running turns, so re-check right before the restart (it interrupts them).
+        const again = (await agents.list()).filter((a) => a.provider === paseoProviderId.codex);
+        if (pending === true && again.some(busyStatus)) {
+          this.update(h, { waitingFor: again.filter(busyStatus).length, code: "turnRunning", message: "A Codex turn started; the daemon restart waits for it." });
+          return;
+        }
+        if (pending === true) {
+          this.lastDaemonAttempt = this.now();
+          daemonOutcome = await this.cli.codexDaemonRestart();
+          if (daemonOutcome === "busy") {
+            this.update(h, { code: "busy", message: "Another SubBaton action is running; retrying the daemon restart." });
+            return;
+          }
+        } else daemonOutcome = pending === false ? "notPending" : "unknown";
+      }
+      const daemonNote =
+        daemonOutcome === "restarted" ? " The shared Codex daemon was restarted." :
+        daemonOutcome && !["notPending", "restarted"].includes(daemonOutcome) ? ` The Codex daemon restart did not complete (${daemonOutcome}); restart it with the SubBaton CLI when no turn runs.` : "";
+      this.update(h, {
+        phase: affected.length ? "reopening" : "done",
+        affected,
+        waitingFor: 0,
+        daemonOutcome,
+        deadline: this.now() + settings.idleWaitMinutes * 60,
+        code: affected.length ? "reloading" : daemonOutcome === "restarted" ? "daemonRestarted" : "nothingToReload",
+        message: (affected.length ? "Reloading idle Codex agents with the new login." : "No Paseo Codex agents needed a reload.") + daemonNote,
+      });
       return;
     }
-    const flags: string[] = [];
+    const options: SwitchOptions = {};
     if (h.provider === "agy") {
       const inventory = await this.cli.agyProcesses();
       if (!inventory.ok) {
         this.update(h, { waitingFor: 1, code: "processUnknown", message: "The agy process list is unavailable; waiting rather than guessing." });
         return;
       }
-      const outside = inventory.processes.filter((p) => p.kind !== "cli").length + Math.max(0, inventory.processes.filter((p) => p.kind === "cli").length - affected.length);
+      // Review H1: only processes whose ancestry runs through the Paseo daemon are Paseo's.
+      const ours = (p: AgyProcessInfo) => !!p.ancestors?.some((pid) => this.paseoPids.includes(pid));
+      const paseo = inventory.processes.filter(ours);
+      // A chain that stopped early (unreadable parent, cycle, 32-entry bound) proves nothing.
+      const unknown = inventory.processes.filter((p) => !ours(p) && (p.ancestors === null || !p.complete));
+      const outside = inventory.processes.length - paseo.length - unknown.length;
+      if (unknown.length > 0) {
+        this.update(h, { waitingFor: unknown.length, code: "attributionUnknown", message: "The CLI did not report which process started each running agy session, so SubBaton cannot tell Paseo's from terminal sessions. Waiting; nothing is stopped." });
+        return;
+      }
       if (outside > 0) {
         this.update(h, {
           waitingFor: outside,
@@ -284,22 +522,50 @@ export class HandoffCoordinator {
         });
         return;
       }
-      if (inventory.processes.length > 0) flags.push("--stop-agy");
-    } else if (h.restartDaemon) flags.push("--restart-daemon");
+      if (paseo.length > 0 && paseo.length < affected.length) {
+        // Fail closed until live tests show idle Paseo agy agents may run without a process.
+        this.update(h, { waitingFor: affected.length - paseo.length, code: "attributionIncomplete", message: "Some idle Paseo agy agents have no matching agy process. Waiting rather than guessing." });
+        return;
+      }
+      if (paseo.length > 0) options.onlyPids = paseo.map((p) => p.pid).sort((a, b) => a - b);
+      if (h.trigger === "automaticSwitch" && !options.onlyPids) {
+        this.update(h, { phase: "done", affected: [], waitingFor: 0, code: "notNeeded", message: "No agy sessions are running any more; the poller switches on its own next tick. Nothing was closed." });
+        return;
+      }
+    } else if (h.restartDaemon) options.restartDaemon = true;
     // Persist the affected set before the CLI runs so a crash can be reported precisely.
     this.update(h, { phase: "switching", affected, waitingFor: 0, code: "switching", message: h.provider === "agy" && affected.length ? `Closing ${affected.length} idle agy ${affected.length === 1 ? "agent" : "agents"} and switching.` : "Switching." });
     await this.persist();
-    const out = await this.cli.switchAccount(h.provider, h.target, flags);
+    // Review L1: re-check right before the CLI runs; anything busy or a changed idle set goes back to waiting.
+    const again = (await agents.list()).filter((a) => a.provider === paseoProviderId[h.provider]);
+    const idleNow = again.filter((a) => a.status === "idle").map((a) => a.id).sort();
+    if (again.some(busyStatus) || idleNow.join() !== [...affected].sort().join()) {
+      this.update(h, { phase: "waiting", affected: [], code: "becameBusy", message: "An agent started a turn or the set of agents changed; waiting again." });
+      return;
+    }
+    const out =
+      h.provider === "agy" && h.trigger === "automaticSwitch"
+        ? await this.cli.agyAutoRunOnce(options.onlyPids ?? [])
+        : await this.cli.switchAccount(h.provider, h.target, options);
     const daemonOutcome = out.daemonOutcome ?? null;
+    if (out.retryAt !== undefined) this.agyRetryAt = out.retryAt;
     switch (out.kind) {
       case "busy":
-        this.update(h, { phase: "waiting", code: "busy", message: "Another SubBaton action is running; retrying." });
+        this.update(h, { phase: "waiting", affected: [], code: "busy", message: "Another SubBaton action is running; retrying." });
+        return;
+      case "notAllowed":
+        // An agy session outside Paseo appeared after the check; the CLI stopped and switched nothing.
+        this.update(h, { phase: "waiting", affected: [], waitingFor: 1, code: "agyOutsidePaseo", message: "An agy session outside Paseo started. Nothing was stopped or switched; waiting until it ends." });
+        return;
+      case "notRun":
+        this.update(h, { phase: "done", affected: [], code: out.code, message: `${out.message} No agents were closed.` });
         return;
       case "switched":
       case "unchanged": {
         const reload = h.provider === "agy" ? affected.length > 0 : out.kind === "switched" && affected.length > 0;
         this.update(h, {
           phase: reload ? "reopening" : "done",
+          deadline: this.now() + (await this.settings()).idleWaitMinutes * 60,
           daemonOutcome,
           code: out.kind === "switched" ? "switched" : "alreadyActive",
           message: reload ? "Switch verified. Reopening agents with their saved conversations." : out.kind === "switched" ? "Switch verified. No Paseo agents needed reopening." : "That account was already active.",
@@ -307,7 +573,8 @@ export class HandoffCoordinator {
         return;
       }
       case "refused":
-        this.update(h, { phase: "failed", daemonOutcome, code: out.code, message: `${out.message} No agents were closed.` });
+        // Review L4: nothing was closed, so there is nothing to reopen.
+        this.update(h, { phase: "failed", affected: [], daemonOutcome, code: out.code, message: `${out.message} No agents were closed.` });
         return;
       case "stoppedFailed":
         this.update(h, {
@@ -327,18 +594,18 @@ export class HandoffCoordinator {
     }
   }
 
-  private async reopen(h: Handoff, agents: AgentPort) {
-    const snapshots = await agents.list();
+  private async reopen(h: Handoff, agents: AgentPort, _settings: HandoffSettings) {
     let waiting = 0;
     for (const id of h.affected) {
       if (h.reopened.includes(id) || h.failedReopen.includes(id)) continue;
-      const snap = snapshots.find((a) => a.id === id);
+      // Review M1: read this agent's state immediately before its reload; earlier reloads take time.
+      const snap = (await agents.list()).find((a) => a.id === id);
       if (!snap) {
         h.failedReopen.push(id);
         continue;
       }
       if (busyStatus(snap)) {
-        // reload() interrupts a running turn, so a reopened-and-busy agent waits.
+        // reload() interrupts a running turn, so a busy agent waits for a later tick.
         waiting++;
         continue;
       }
@@ -350,6 +617,18 @@ export class HandoffCoordinator {
       }
     }
     if (waiting > 0) {
+      if (this.now() > h.deadline) {
+        const closed = h.provider === "agy";
+        this.update(h, {
+          phase: closed ? "failed" : "done",
+          waitingFor: 0,
+          code: "reopenTimeout",
+          message: closed
+            ? `Reopened ${h.reopened.length}; ${waiting} stayed busy until the wait ended. Use Reopen agents when they are idle.`
+            : `Reopened ${h.reopened.length}; ${waiting} stayed busy until the wait ended and keep their current session. Reload them from Paseo when idle.`,
+        });
+        return;
+      }
       this.update(h, { waitingFor: waiting, code: "reopenWaiting", message: `Reopened ${h.reopened.length}; ${waiting} still in a turn.` });
       return;
     }
@@ -359,7 +638,7 @@ export class HandoffCoordinator {
       waitingFor: 0,
       code: failed ? "reopenFailed" : "completed",
       message: failed
-        ? `Reopened ${h.reopened.length}; ${failed} could not be reopened (archived or reload failed). Reopen them from Paseo.`
+        ? `Reopened ${h.reopened.length}; ${failed} could not be reopened (archived, timed out or reload failed). Reopen them from Paseo.`
         : `Done. Reopened ${h.reopened.length} ${h.reopened.length === 1 ? "agent" : "agents"} with the new login.`,
     });
   }

@@ -1,7 +1,7 @@
 import { BinaryTrustError } from "./binary.js";
 import { settingsMessages } from "../shared/settings-messages.js";
 import { z } from "zod";
-import type { HandoffCli, SwitchOutcome } from "./handoff.js";
+import type { AgyProcessInfo, HandoffCli, SwitchOptions, SwitchOutcome } from "./handoff.js";
 import type { HandoffProvider } from "../shared/handoff.js";
 import {
   normalizeDocument,
@@ -52,6 +52,7 @@ const envelope = z.object({
       code: z.string(),
       cause: z.string().optional(),
       stoppedProcesses: z.array(z.unknown()).max(1024).optional(),
+      stopAttempted: z.boolean().optional(),
     })
     .optional(),
 });
@@ -63,9 +64,11 @@ const failure = (code: string, message: string): ActionResult => ({
 const messages: Record<string, string> = {
   busy: "SubBaton is busy; retry later.",
   stopFailed: "Some agy sessions did not stop safely. Inspect holders before retrying recovery.",
+  stopRefused: "agy sessions were not stopped (a desktop, unknown or changed session). Nothing was stopped or switched.",
   ambiguousStores: "Native stores disagree. Inspect the retained copies with the CLI.",
   identityHintMismatch: "The selected recovery identity does not match. Confirm its owner with the CLI.",
   processesRunning: "agy is running. Finish those sessions before switching.",
+  processesNotAllowed: "An agy session outside Paseo is running. Nothing was stopped or switched.",
   needsLogin: "This account needs an official login or must be enabled.",
   recoveryRequired: "Recovery is pending. Resolve it with the CLI first.",
   signingRequired: "Use a stable signed SubBaton binary.",
@@ -87,6 +90,10 @@ const uncertainMessages: Record<Exclude<CallKind, "credential">, string> = {
   poller:
     "The poller change is unknown. Read poller status before retrying; nothing was retried.",
 };
+const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const pidValue = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v > 0 && v < 2 ** 31 ? v : null);
+/** The CLI accepts 1 to 64 positive PIDs for --only-pids; launchd and the kernel are never listed. */
+const validPidList = (pids: number[]) => pids.length <= 64 && pids.every((p) => Number.isInteger(p) && p > 1 && p < 2 ** 31) && new Set(pids).size === pids.length;
 export class SubBatonService {
   private cached: { value: StatusResult; at: number } | null = null;
   private pending: Promise<StatusResult> | null = null;
@@ -203,7 +210,8 @@ export class SubBatonService {
               "SubBaton refused the operation. Inspect the CLI safely.",
           ),
           // agy: holders may already have been stopped when the switch then failed.
-          stopped: code === "stopFailed" || (value.error?.stoppedProcesses?.length ?? 0) > 0,
+          // stopRefused/stopAttempted:false: refused before any signal, so nothing was closed.
+          stopped: value.error?.stopAttempted === true || (value.error?.stopAttempted !== false && code === "stopFailed") || (value.error?.stoppedProcesses?.length ?? 0) > 0,
         } as const;
       }
       if (
@@ -222,6 +230,8 @@ export class SubBatonService {
         mutation &&
         kind === "credential" &&
         !argv.includes("usage") &&
+        !argv.includes("auto") &&
+        !argv.includes("daemon") &&
         !["switched", "unchanged", "alreadyActive", "no-candidate"].includes(
           (value.result as { outcome: string }).outcome,
         )
@@ -678,22 +688,46 @@ export class SubBatonService {
       ?.accounts.find((a) => a.id === target);
     return account ? { alias: account.alias } : null;
   }
-  async agyProcesses(): Promise<{ ok: true; processes: { kind: string }[] } | { ok: false }> {
-    const response = await this.call(["agy", "processes"], 15000, false, { kind: "settings" });
+  /**
+   * agy process inventory. Ancestry (review H1) comes from the CLI's per-process `ancestors`
+   * ([{pid, executable}], parent first up to launchd, at most 32) and `ancestorsComplete`; a
+   * process without ancestry is unattributable.
+   */
+  async agyProcesses(): Promise<{ ok: true; processes: AgyProcessInfo[] } | { ok: false }> {
+    const response = await this.call(["agy", "processes"], 15000, false, { kind: "read" });
     const processes = (response.result as { processes?: unknown } | undefined)?.processes;
     if (response.error || !Array.isArray(processes) || processes.length > 1024) return { ok: false };
-    return {
-      ok: true,
-      processes: processes.map((p) => ({
-        kind: typeof (p as { kind?: unknown })?.kind === "string" ? String((p as { kind: string }).kind).slice(0, 32) : "unknown",
-      })),
-    };
+    const parsed: AgyProcessInfo[] = [];
+    for (const raw of processes) {
+      const row = (raw ?? {}) as { pid?: unknown; kind?: unknown; ancestors?: unknown; ancestorsComplete?: unknown };
+      const own = pidValue(row.pid);
+      if (own === null) return { ok: false };
+      let ancestors: number[] | null = null;
+      if (Array.isArray(row.ancestors) && row.ancestors.length <= 64) {
+        const chain = row.ancestors.map((a) => pidValue((a as { pid?: unknown } | null)?.pid));
+        if (chain.every((v) => v !== null)) ancestors = chain as number[];
+      }
+      parsed.push({
+        pid: own,
+        kind: typeof row.kind === "string" ? row.kind.slice(0, 32) : "unknown",
+        ancestors,
+        complete: ancestors !== null && row.ancestorsComplete === true,
+      });
+    }
+    return { ok: true, processes: parsed };
   }
   /** Runs a handoff switch: fixed argv, verified outcome required, stop detection on refusal. */
-  async handoffSwitch(provider: HandoffProvider, target: string, flags: string[]): Promise<SwitchOutcome> {
-    const allowed = provider === "agy" ? ["--stop-agy"] : ["--restart-daemon"];
-    if (!/^[0-9a-f-]{36}$/i.test(target) || flags.some((f) => !allowed.includes(f)) || !this.knownAccount(provider, target))
+  async handoffSwitch(provider: HandoffProvider, target: string, options: SwitchOptions): Promise<SwitchOutcome> {
+    const pids = options.onlyPids ?? [];
+    const validPids = validPidList(pids);
+    const wrongScope = provider === "agy" ? options.restartDaemon === true : pids.length > 0;
+    if (!/^[0-9a-f-]{36}$/i.test(target) || !validPids || wrongScope || !this.knownAccount(provider, target))
       return { kind: "refused", code: "invalidInput", message: "The handoff target is not a known saved account." };
+    // agy: stop exactly the Paseo-attributed PIDs; the CLI refuses if any other agy process runs.
+    const flags =
+      provider === "agy"
+        ? pids.length ? ["--stop-agy", "--only-pids", pids.join(",")] : []
+        : options.restartDaemon ? ["--restart-daemon"] : [];
     if (this.mutating) return { kind: "busy", code: "busy", message: "Another SubBaton action is still running." };
     this.mutating = true;
     this.invalidate();
@@ -703,6 +737,8 @@ export class SubBatonService {
         const stopped = "stopped" in response && response.stopped === true;
         if (response.error.outcome === "uncertain")
           return { kind: "uncertain", code: "uncertain", message: "The switch result is uncertain." };
+        if (response.error.code === "processesNotAllowed")
+          return { kind: "notAllowed", code: "processesNotAllowed", message: response.error.message };
         return {
           kind: stopped ? "stoppedFailed" : "refused",
           code: response.error.code,
@@ -723,10 +759,109 @@ export class SubBatonService {
     }
   }
   /** The coordinator's view of this service. */
+  /** agy auto plan, read-only: is running agy the only thing blocking an automatic switch? */
+  async agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false }> {
+    const response = await this.call(["agy", "auto", "plan"], 15000, false, { kind: "read" });
+    if (response.error) return { ok: false };
+    const plan = response.result as { blockedOnlyByProcesses?: unknown; targetIfProcessesStopped?: unknown; executionEnabled?: unknown };
+    if (typeof plan.blockedOnlyByProcesses !== "boolean") return { ok: false };
+    const target = typeof plan.targetIfProcessesStopped === "string" && uuidLike.test(plan.targetIfProcessesStopped) ? plan.targetIfProcessesStopped : null;
+    // A paused or disabled provider never executes, so it is never "blocked only by processes" for us.
+    const blocked = plan.blockedOnlyByProcesses && plan.executionEnabled === true && target !== null;
+    return { ok: true, blockedOnlyByProcesses: blocked, target: blocked ? target : null };
+  }
+  /** agy auto run-once --stop-agy --only-pids: the automatic switch, stopping only Paseo's sessions. */
+  async agyAutoRunOnce(pids: number[]): Promise<SwitchOutcome> {
+    if (pids.length === 0 || !validPidList(pids))
+      return { kind: "refused", code: "invalidInput", message: "No Paseo agy sessions to stop." };
+    if (this.mutating) return { kind: "busy", code: "busy", message: "Another SubBaton action is still running." };
+    this.mutating = true;
+    this.invalidate();
+    try {
+      const response = await this.call(["agy", "auto", "run-once", "--stop-agy", "--only-pids", pids.join(",")], 120000, true);
+      if (response.error) {
+        if (response.error.outcome === "uncertain") return { kind: "uncertain", code: "uncertain", message: "The automatic switch result is uncertain." };
+        const stopped = "stopped" in response && response.stopped === true;
+        return { kind: stopped ? "stoppedFailed" : "refused", code: response.error.code, message: response.error.message };
+      }
+      const result = response.result as {
+        outcome?: unknown;
+        reason?: unknown;
+        failure?: unknown;
+        stopProcesses?: unknown;
+        stopAttempted?: unknown;
+        retryAt?: unknown;
+        stoppedProcesses?: unknown;
+        processes?: unknown;
+        switch?: { postSwitchVerification?: unknown; stoppedProcesses?: unknown };
+      };
+      const reason = typeof result.reason === "string" ? result.reason.slice(0, 64) : "";
+      const stoppedAny = (Array.isArray(result.stoppedProcesses) && result.stoppedProcesses.length > 0) || (Array.isArray(result.switch?.stoppedProcesses) && result.switch.stoppedProcesses.length > 0);
+      switch (result.outcome) {
+        case "switched":
+          return ["verified", "reapplied"].includes(String(result.switch?.postSwitchVerification))
+            ? { kind: "switched", code: "switched", message: "Automatic switch verified." }
+            : { kind: "uncertain", code: "uncertain", message: "The automatic switch could not be verified." };
+        case "deferred":
+          if (reason === "processNotAllowed")
+            return { kind: "notAllowed", code: "processesNotAllowed", message: messages.processesNotAllowed! };
+          if (reason === "processStopFailed" && result.stopAttempted !== false)
+            return {
+              kind: "stoppedFailed",
+              code: "stopFailed",
+              message: "Some agy sessions did not stop. Nothing was switched.",
+              ...(typeof result.retryAt === "number" && Number.isFinite(result.retryAt) ? { retryAt: result.retryAt } : {}),
+            };
+          // processStopRefused (stopAttempted false), busy, processBusy...: nothing was signalled.
+          return { kind: "notRun", code: reason || "deferred", message: "The automatic switch did not run. Nothing was stopped." };
+        case "failed": {
+          const code = typeof result.failure === "string" ? result.failure.slice(0, 64) : "switchFailed";
+          return stoppedAny
+            ? { kind: "stoppedFailed", code, message: "The automatic switch failed after agy sessions were stopped." }
+            : { kind: "refused", code, message: "The automatic switch failed. Nothing was stopped." };
+        }
+        case "uncertain":
+          return { kind: "uncertain", code: "uncertain", message: "The automatic switch result is uncertain." };
+        default:
+          // off, paused, held, stay, blocked, revalidated: the policy changed its mind; nothing ran.
+          if (result.stopProcesses === true && stoppedAny)
+            return { kind: "uncertain", code: "uncertain", message: "Unexpected automatic switch result after stopping agy sessions." };
+          return { kind: "notRun", code: typeof result.outcome === "string" ? result.outcome.slice(0, 64) : "unknown", message: "The automatic switch no longer applies. Nothing was stopped." };
+      }
+    } finally {
+      this.invalidate();
+      this.mutating = false;
+    }
+  }
+  /** codex processes: is a daemon restart still pending after an automatic switch? null = unknown. */
+  async codexDaemonPending(): Promise<boolean | null> {
+    const response = await this.call(["codex", "processes"], 15000, false, { kind: "read" });
+    if (response.error) return null;
+    const pending = (response.result as { daemonRestartPending?: unknown }).daemonRestartPending;
+    return typeof pending === "boolean" ? pending : null;
+  }
+  /** codex daemon restart: restarted, failed or pending (timeout); anything else is unknown. */
+  async codexDaemonRestart(): Promise<string> {
+    if (this.mutating) return "busy";
+    this.mutating = true;
+    try {
+      const response = await this.call(["codex", "daemon", "restart"], 60000, true);
+      if (response.error) return response.error.outcome === "uncertain" ? "unknown" : "failed";
+      const outcome = (response.result as { daemonOutcome?: unknown; outcome?: unknown });
+      const value = typeof outcome.daemonOutcome === "string" ? outcome.daemonOutcome : outcome.outcome;
+      return ["restarted", "failed", "pending"].includes(String(value)) ? String(value) : "unknown";
+    } finally {
+      this.mutating = false;
+    }
+  }
   handoffCli(): HandoffCli {
     return {
       agyProcesses: () => this.agyProcesses(),
-      switchAccount: (provider, target, flags) => this.handoffSwitch(provider, target, flags),
+      switchAccount: (provider, target, options) => this.handoffSwitch(provider, target, options),
+      agyAutoPlan: () => this.agyAutoPlan(),
+      agyAutoRunOnce: (pids) => this.agyAutoRunOnce(pids),
+      codexDaemonPending: () => this.codexDaemonPending(),
+      codexDaemonRestart: () => this.codexDaemonRestart(),
       events: async (since) => {
         const read = await this.events(since === null ? {} : { since: Math.floor(since) });
         return read.ok && read.data ? { ok: true, events: read.data.events } : { ok: false };

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { readFile, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileHandoffStore } from "../server/handoff-store.js";
@@ -14,7 +14,7 @@ test("handoff state file is owner-only, atomic and refuses symlinks", async () =
     const path = join(dir, "nested", "handoff-v1.json");
     const store = fileHandoffStore(path);
     assert.equal(await store.load(), null);
-    const state = { schemaVersion: 1 as const, handoffs: { codex: null, agy: null }, eventWatermark: 5 };
+    const state = { schemaVersion: 1 as const, handoffs: { codex: null, agy: null }, eventWatermark: 5, notice: null };
     await store.save(state);
     assert.deepEqual(await store.load(), state);
     assert.equal((await stat(path)).mode & 0o777, 0o600);
@@ -23,6 +23,13 @@ test("handoff state file is owner-only, atomic and refuses symlinks", async () =
     await writeFile(join(dir, "real.json"), "{}");
     await symlink(join(dir, "real.json"), link);
     await assert.rejects(fileHandoffStore(link).load());
+    // Review L3: an unreadable file is moved aside, not overwritten.
+    await writeFile(path, "{broken");
+    const kept = await store.setAside!();
+    assert.match(kept ?? "", /^handoff-v1\.json\.unreadable-\d+$/);
+    assert.equal(await store.load(), null);
+    assert.equal(await readFile(join(dir, "nested", kept!), "utf8"), "{broken");
+    assert.equal(await fileHandoffStore(join(dir, "missing.json")).setAside!(), null);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

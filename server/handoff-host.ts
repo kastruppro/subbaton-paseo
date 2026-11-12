@@ -11,7 +11,7 @@ import {
 import { HandoffCoordinator, paseoAgentPort, type AgentPort, type HandoffStore } from "./handoff.js";
 import type { SubBatonService } from "./service.js";
 
-const defaults: HandoffSettings = { reloadCodexAfterAutomaticSwitch: true, restartCodexDaemon: false, idleWaitMinutes: 30 };
+const defaults: HandoffSettings = handoffSettings.schema.parse({});
 
 type Host = Pick<PluginServerContext, "registerSettings" | "handle" | "addHook">;
 

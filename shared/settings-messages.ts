@@ -20,6 +20,8 @@ export const settingsMessages: Record<string, string> = {
   newerSchema:
     "These settings use a newer schema than this SubBaton CLI supports. Update the CLI before editing.",
   revisionRequired: "Reload settings; the current revision is required.",
+  pauseChanged:
+    "The pause changed or ended since it was loaded. Review the new reason after the reload, then resume again if needed.",
   releaseRefused:
     "Release was refused: the block no longer matches, or the account needs login, has expired or has pending recovery.",
   recoveryRequired:

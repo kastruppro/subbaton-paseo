@@ -66,13 +66,14 @@ const messages: Record<string, string> = {
   conflict: "Login ownership is conflicting. Review it with the CLI.",
   deviceBlocked: "The issuer blocked this device/account.",
 };
-type CallKind = "credential" | "settings" | "poller";
+type CallKind = "credential" | "settings" | "poller" | "read";
 interface CallOptions {
   kind?: CallKind;
   input?: string;
   unavailable?: [string, string];
 }
 const uncertainMessages: Record<Exclude<CallKind, "credential">, string> = {
+  read: "The result is unknown; nothing was changed. Retry shortly.",
   settings:
     "The settings result is unknown. Reload settings and check the current values before retrying; nothing was retried.",
   poller:
@@ -498,6 +499,8 @@ export class SubBatonService {
     const { provider, expectedRevision, changes } = parsed.data;
     const section = this.knownSettings.get(provider);
     if (!section) return { result: settingsError("reloadSettings"), section: null };
+    // The draft's base revision must still be the newest one this host has seen (review L1/M1).
+    if (expectedRevision !== section.revision) return { result: settingsError("revisionConflict"), section: null };
     const validation = validateChanges(section, changes);
     if (!validation.ok) return { result: settingsError(validation.code), section: null };
     const body = JSON.stringify({
@@ -520,17 +523,21 @@ export class SubBatonService {
     const action = parsed.data;
     const section = this.knownSettings.get(action.provider);
     if (!section) return { result: settingsError("reloadSettings"), section: null };
+    if (action.expectedRevision !== section.revision) return { result: settingsError("revisionConflict"), section: null };
     if (!section.actions.includes(action.action))
       return { result: failure("unsupportedAction", "The CLI does not offer this action for this provider."), section: null };
-    if (action.action === "resumeAuto")
+    if (action.action === "resumeAuto") {
+      if (!section.auto.paused || action.pauseId !== section.auto.pauseId)
+        return { result: settingsError("pauseChanged"), section: null };
       return this.settingsMutation(
         action.provider,
-        ["settings", "resume-auto", action.provider, "--expected-revision", action.expectedRevision],
+        ["settings", "resume-auto", action.provider, "--pause-id", action.pauseId, "--expected-revision", action.expectedRevision],
         {
           resumed: { outcome: "success", code: "resumed", message: "Automatic switching resumed." },
           notPaused: { outcome: "unchanged", code: "notPaused", message: "Automatic switching was not paused." },
         },
       );
+    }
     if (!section.accounts.some((a) => a.id === action.account))
       return { result: settingsError("unknownAccount"), section: null };
     const release = action.action === "releaseQuarantine";
@@ -586,7 +593,10 @@ export class SubBatonService {
     try {
       // Install pins the same canonical binary that just passed the plugin's trust checks.
       const response = await this.call(
-        (binary) => (install ? ["poller", "install", "--binary", binary] : ["poller", "uninstall"]),
+        (binary) =>
+          install
+            ? ["poller", "install", "--binary", binary, ...(parsed.data.environment === "keep" ? [] : ["--environment", parsed.data.environment])]
+            : ["poller", "uninstall"],
         120000,
         true,
         { kind: "poller" },
@@ -617,10 +627,10 @@ export class SubBatonService {
       return { ok: false, data: null, error: failure("invalidInput", "Invalid event time.") };
     const since = parsed.data.since;
     const response = await this.call(
-      since === undefined ? ["events"] : ["events", "--since", String(since)],
+      since === undefined ? ["events"] : ["events", "--since", String(Math.floor(since))],
       10000,
       false,
-      { kind: "settings", unavailable: ["eventsUnavailable", "Events could not be read. Retry shortly."] },
+      { kind: "read", unavailable: ["eventsUnavailable", "Events could not be read. Retry shortly."] },
     );
     if (response.error) return { ok: false, data: null, error: response.error };
     const events = (response.result as { events?: unknown }).events;
@@ -641,7 +651,7 @@ export class SubBatonService {
       [...(provider === "claude" ? [] : [provider]), "auto", "plan"],
       15000,
       false,
-      { kind: "settings", unavailable: ["planUnavailable", "The automatic plan could not be read. Retry shortly."] },
+      { kind: "read", unavailable: ["planUnavailable", "The automatic plan could not be read. Retry shortly."] },
     );
     if (response.error) return { ok: false, data: null, error: response.error };
     const plan = autoPlanSchema.safeParse(response.result);

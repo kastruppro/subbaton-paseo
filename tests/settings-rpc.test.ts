@@ -242,7 +242,7 @@ test("only one mutation runs at a time", async () => {
     return updated();
   };
   const first = service.settingsSet({ provider: "claude", expectedRevision: revision, changes: [{ path: ["autoEnabled"], value: true }] });
-  const second = await service.settingsAction({ action: "resumeAuto", provider: "claude", expectedRevision: revision });
+  const second = await service.settingsAction({ action: "resumeAuto", provider: "claude", pauseId: "pause-7", expectedRevision: revision });
   assert.equal(second.result.code, "busy");
   release();
   assert.equal((await first).result.outcome, "success");
@@ -256,12 +256,12 @@ test("release and resume actions use fixed argv with the revision and known acco
   assert.equal(released.result.outcome, "success");
   assert.match(released.result.message, /does not validate or renew/);
   assert.deepEqual(cli.calls.at(-1)?.argv, ["settings", "release-quarantine", "claude", accountB, "--expected-revision", revision, "--json"]);
-  const resumed = await service.settingsAction({ action: "resumeAuto", provider: "claude", expectedRevision: "r2" });
+  const resumed = await service.settingsAction({ action: "resumeAuto", provider: "claude", pauseId: "pause-7", expectedRevision: "r2" });
   assert.equal(resumed.result.outcome, "success");
-  assert.deepEqual(cli.calls.at(-1)?.argv, ["settings", "resume-auto", "claude", "--expected-revision", "r2", "--json"]);
+  assert.deepEqual(cli.calls.at(-1)?.argv, ["settings", "resume-auto", "claude", "--pause-id", "pause-7", "--expected-revision", "r2", "--json"]);
   assert.equal(resumed.section?.revision, "r3");
   cli.on(["settings", "resume-auto"], ok({ outcome: "notPaused", provider: "claude", auto: {} }));
-  assert.equal((await service.settingsAction({ action: "resumeAuto", provider: "claude", expectedRevision: "r3" })).result.outcome, "unchanged");
+  assert.equal((await service.settingsAction({ action: "resumeAuto", provider: "claude", pauseId: "pause-7", expectedRevision: "r3" })).result.outcome, "unchanged");
 });
 
 test("release actions refuse unknown accounts, wrong providers and missing revisions without spawning", async () => {
@@ -288,7 +288,7 @@ test("Codex device-block release uses its own command", async () => {
   cli.on(["settings", "release-device-block"], ok({ outcome: "deviceBlockReleased", provider: "codex", account: accountA, settings: codex, warnings: [] }));
   const result = await service.settingsAction({ action: "releaseDeviceBlock", provider: "codex", account: accountA, expectedRevision: "c1" });
   assert.equal(
-    (await service.settingsAction({ action: "resumeAuto", provider: "codex", expectedRevision: "c1" })).result.code,
+    (await service.settingsAction({ action: "resumeAuto", provider: "codex", pauseId: "pause-7", expectedRevision: "c1" })).result.code,
     "unsupportedAction",
   );
   assert.equal(result.result.outcome, "success");
@@ -364,3 +364,66 @@ test("auto plan is read-only, provider-scoped and bounded", async () => {
   assert.equal((await service.autoPlan({ provider: "--x" } as never)).ok, false);
   assert.equal(cli.calls.length, spawned);
 });
+
+test("resume refuses a stale or missing pause ID before spawning and maps pauseChanged", async () => {
+  const { cli, service } = await loaded();
+  const spawned = cli.calls.length;
+  for (const input of [
+    { action: "resumeAuto", provider: "claude", pauseId: "pause-6", expectedRevision: revision },
+    { action: "resumeAuto", provider: "claude", expectedRevision: revision },
+    { action: "resumeAuto", provider: "claude", pauseId: "--dry-run", expectedRevision: revision },
+  ]) {
+    const result = await service.settingsAction(input as never);
+    assert.equal(result.result.outcome, "error", JSON.stringify(input));
+  }
+  assert.equal((await service.settingsAction({ action: "resumeAuto", provider: "claude", pauseId: "pause-6", expectedRevision: revision })).result.code, "pauseChanged");
+  assert.equal(cli.calls.length, spawned);
+  cli.on(["settings", "resume-auto"], refused("pauseChanged"));
+  const changed = await service.settingsAction({ action: "resumeAuto", provider: "claude", pauseId: "pause-7", expectedRevision: revision });
+  assert.equal(changed.result.code, "pauseChanged");
+  assert.doesNotMatch(changed.result.message, /secret/);
+});
+
+test("argv-bound values cannot start with a dash and must match the newest known revision", async () => {
+  const { cli, service } = await loaded();
+  const spawned = cli.calls.length;
+  for (const expectedRevision of ["--dry-run", "-x", "6f1c2d4e-0000-4000-8000-000000000099"]) {
+    const set = await service.settingsSet({ provider: "claude", expectedRevision, changes: [{ path: ["autoEnabled"], value: true }] });
+    assert.equal(set.result.outcome, "error", expectedRevision);
+    const release = await service.settingsAction({ action: "releaseQuarantine", provider: "claude", account: accountB, expectedRevision });
+    assert.equal(release.result.outcome, "error", expectedRevision);
+  }
+  const stale = await service.settingsSet({ provider: "claude", expectedRevision: "6f1c2d4e-0000-4000-8000-000000000099", changes: [{ path: ["autoEnabled"], value: true }] });
+  assert.equal(stale.result.code, "revisionConflict");
+  assert.equal((await service.settingsAction({ action: "releaseQuarantine", provider: "claude", account: "-x", expectedRevision: revision } as never)).result.outcome, "error");
+  assert.equal(cli.calls.length, spawned);
+});
+
+test("poller install keeps pinned provider homes unless the owner explicitly chooses otherwise", async () => {
+  const { cli, service } = scripted();
+  const pinned = { CODEX_HOME: "/Users/x/work/codex" };
+  cli.on(["poller", "status"], ok({ installed: true, loaded: true, lastTickAt: 1, stale: false, binary: "/fixture/subbaton", providers: {}, pinnedEnvironment: pinned }));
+  const read = await service.pollerStatus({});
+  assert.deepEqual(read.data?.pinnedEnvironment, pinned);
+  cli.on(["poller", "install"], ok({ outcome: "installed", installed: true, loaded: true, lastTickAt: null, stale: true, providers: {}, pinnedEnvironment: pinned, environmentSource: "kept" }));
+  const kept = await service.pollerLifecycle({ action: "install" });
+  assert.deepEqual(cli.calls.at(-1)?.argv, ["poller", "install", "--binary", "/fixture/subbaton", "--json"]);
+  assert.equal(kept.status?.environmentSource, "kept");
+  for (const environment of ["current", "none"] as const) {
+    await service.pollerLifecycle({ action: "install", environment });
+    assert.deepEqual(cli.calls.at(-1)?.argv, ["poller", "install", "--binary", "/fixture/subbaton", "--environment", environment, "--json"]);
+  }
+  assert.equal((await service.pollerLifecycle({ action: "install", environment: "--x" } as never)).result.outcome, "error");
+  cli.on(["poller", "status"], ok({ installed: false, lastTickAt: null, stale: true, providers: {}, pinnedEnvironment: { PATH: "/tmp" } }));
+  assert.equal((await service.pollerStatus({})).data?.pinnedEnvironment, null);
+});
+
+test("events send whole-second since values", async () => {
+  const { cli, service } = scripted();
+  cli.on(["events"], ok({ events: [] }));
+  await service.events({ since: 0.0000001 });
+  assert.deepEqual(cli.calls.at(-1)?.argv, ["events", "--since", "0", "--json"]);
+  await service.events({ since: 1731500000.9 });
+  assert.deepEqual(cli.calls.at(-1)?.argv, ["events", "--since", "1731500000", "--json"]);
+});
+

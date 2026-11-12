@@ -313,12 +313,13 @@ export const claudeSection = (rev = revision, values: Record<string, unknown> = 
   thresholdResolution: "CLI text.",
   actions: [
     { name: "releaseQuarantine", command: "x", scope: "x", required: ["account", "expectedRevision"], audit: true },
-    { name: "resumeAuto", command: "x", scope: "x", required: ["expectedRevision"], audit: false },
+    { name: "resumeAuto", command: "x", scope: "x", required: ["expectedRevision", "pauseId"], audit: false },
   ],
   auto: {
     paused: true,
     pauseReason: "flapping",
     pausedAt: 1000,
+    pauseId: "pause-7",
     recentAutomaticSwitches: 4,
     flapLimit: 4,
     flapWindowSeconds: 3600,

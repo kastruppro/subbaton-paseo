@@ -9,11 +9,12 @@ const longText = z.string().max(2048);
 const time = z.number().finite().nullable();
 export const identifierPattern = /^[A-Za-z0-9_:.-]{1,100}$/;
 export const identifier = z.string().regex(identifierPattern);
+// Values placed in CLI argv never start with "-", so they cannot be read as a flag (review L1).
 export const revisionSchema = z
   .string()
-  .min(1)
   .max(128)
-  .regex(/^[A-Za-z0-9-]+$/);
+  .regex(/^[A-Za-z0-9][A-Za-z0-9-]*$/);
+export const argvIdentifier = z.string().regex(/^[A-Za-z0-9_:.][A-Za-z0-9_:.-]{0,99}$/);
 const known = <T extends string>(values: readonly T[]) =>
   z
     .string()
@@ -58,6 +59,7 @@ export const settingsFieldSchema = z.object({
   maximum: z.number().finite().optional(),
   enum: z.array(text).max(32).optional(),
   enumDescriptions: z.record(text, text).optional(),
+  runtimeDetail: longText.optional(),
   knownKeys: z.array(identifier).max(512).optional(),
   allowedRanges: z
     .array(z.tuple([z.number().finite(), z.number().finite()]))
@@ -70,6 +72,7 @@ export const autoSummarySchema = z.object({
   paused: z.boolean(),
   pauseReason: text.nullable().default(null),
   pausedAt: time.default(null),
+  pauseId: z.preprocess((v) => (argvIdentifier.safeParse(v).success ? v : null), argvIdentifier.nullable()).default(null),
   lastAutomaticSwitchAt: time.default(null),
   recentAutomaticSwitches: z.number().int().min(0).max(10000).default(0),
   flapLimit: z.number().int().min(0).max(10000).nullable().default(null),
@@ -163,18 +166,19 @@ export const settingsActionInput = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("releaseQuarantine"),
     provider: providerSchema,
-    account: identifier,
+    account: argvIdentifier,
     expectedRevision: revisionSchema,
   }),
   z.object({
     action: z.literal("releaseDeviceBlock"),
     provider: z.literal("codex"),
-    account: identifier,
+    account: argvIdentifier,
     expectedRevision: revisionSchema,
   }),
   z.object({
     action: z.literal("resumeAuto"),
     provider: providerSchema,
+    pauseId: argvIdentifier,
     expectedRevision: revisionSchema,
   }),
 ]);
@@ -203,6 +207,13 @@ export const pollerStatusSchema = z.object({
   stale: z.boolean(),
   binary: z.string().max(4096).nullable().default(null),
   tickSeconds: z.number().finite().nullable().default(null),
+  /** Provider-home overrides the LaunchAgent is pinned to (paths only); null when not installed. */
+  pinnedEnvironment: z
+    .partialRecord(z.enum(["CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"]), z.string().max(4096))
+    .nullable()
+    .catch(null)
+    .default(null),
+  environmentSource: z.string().max(32).optional(),
   providers: z
     .record(z.string().max(16), pollerProviderSchema)
     .transform((rows) =>
@@ -227,6 +238,8 @@ export const pollerStatusRpc = defineRpc({
 });
 export const pollerLifecycleInput = z.object({
   action: z.enum(["install", "uninstall"]),
+  /** keep (CLI default) leaves the pinned provider homes; current re-pins from the Paseo daemon; none removes them. */
+  environment: z.enum(["keep", "current", "none"]).default("keep"),
 });
 export const pollerLifecycleRpc = defineRpc({
   name: "poller.lifecycle",

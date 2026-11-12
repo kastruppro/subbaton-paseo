@@ -1,13 +1,15 @@
 # Local installation
 
-Use Paseo **0.15.3 or newer** on both daemon and client, and the signed SubBaton phase-1b CLI. The plugin is trusted, unsandboxed code; install only on the intended daemon. Development did not install it or change the running daemon.
+Use Paseo **0.15.3 or newer** on both daemon and client, and a signed SubBaton CLI built from current app source. The old phase worktrees were removed after merge. For a future build, create a new app feature worktree with `wt switch --create <branch> --no-cd`, run `scripts/build-signed.sh` there, and set `APP_BUILD` to its `build/subbaton` before the commands below. The plugin is trusted, unsandboxed code; install only on the intended daemon. Development did not install it or change the running daemon.
 
 1. Verify the signed CLI and copy it to the default shared location, or set its absolute path later under the plugin's settings. Inspect any pre-existing /Users/Shared/subbaton directory first: it must belong to root or your current user and must not be group/world-writable. Do not reuse a folder planted by another local user; have the owner repair/remove it through normal administrative controls. The plugin refuses untrusted custody before executing anything:
 
 ```sh
-/usr/bin/codesign --verify --strict --verbose=2 /path/to/subbaton-app/build/subbaton
+export APP_BUILD="/absolute/path/to/new/app/worktree/build/subbaton"
+test -f "$APP_BUILD" || { echo "STOP: signed build missing"; exit 1; }
+/usr/bin/codesign --verify --strict --verbose=2 "$APP_BUILD"
 install -d -m 755 /Users/Shared/subbaton
-install -m 755 /path/to/subbaton-app/build/subbaton /Users/Shared/subbaton/subbaton
+install -m 755 "$APP_BUILD" /Users/Shared/subbaton/subbaton
 /usr/bin/codesign --verify --strict --verbose=2 /Users/Shared/subbaton/subbaton
 ```
 
@@ -37,7 +39,7 @@ paseo plugin ls
 paseo plugin logs subbaton
 ```
 
-For another daemon, add its normal `--host` selector to the plugin commands and install a path on that host. Local source stays at this worktree path; keep it while installed. The host compiles TypeScript entrypoints; build/ bundles are verification artifacts, not copied into Paseo. Runtime React, React Native, SDK, query and Zod libraries are supplied by Paseo; npm dependencies here are development-only.
+For another daemon, add its normal `--host` selector to the plugin commands and install a path on that host. The merged main checkout is the current source; keep the installed source path available to Paseo. The host compiles TypeScript entrypoints; build/ bundles are verification artifacts, not copied into Paseo. Runtime React, React Native, SDK, query and Zod libraries are supplied by Paseo; npm dependencies here are development-only.
 
 If plugins are globally disabled, the owner must explicitly enable trusted plugins in **Settings → Plugins → Enable plugins** on that daemon. Backend plugins can access that daemon's files/processes/network; client plugins run inside Paseo. Do not bypass the global trust switch or restart the daemon. Confirm `subbaton` reaches running with no load error.
 

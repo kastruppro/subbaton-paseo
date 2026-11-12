@@ -49,8 +49,8 @@ import {
 } from "./display.js";
 import { useStatus } from "./use-status.js";
 import { useHandoff } from "./use-handoff.js";
-import { handoffActive, handoffLine, handoffTone } from "./handoff-model.js";
-import { handoffRequestRpc } from "../shared/handoff.js";
+import { handoffActive, handoffEffect, handoffLine, handoffTone } from "./handoff-model.js";
+import { handoffRequestRpc, handoffSettings } from "../shared/handoff.js";
 type Palette = ReturnType<typeof themePalette>;
 const PaletteContext = createContext<Palette | null>(null);
 function usePalette() {
@@ -750,8 +750,10 @@ function PopoverContent(
     handoffs = useHandoff(props.host.id);
   const [busy, setBusy] = useState(false),
     [notices, setNotices] = useState<Partial<Record<Provider, string>>>({}),
-    [selected, setSelected] = useState<Provider>("claude");
+    [selected, setSelected] = useState<Provider>("claude"),
+    [confirmIdle, setConfirmIdle] = useState<{ provider: "codex" | "agy"; id: string; alias: string } | null>(null);
   const display = useSettings(displaySettings);
+  const handoffPrefs = useSettings(handoffSettings);
   const warning = display.status === "ready" ? display.values.warning : 75,
     danger = display.status === "ready" ? display.values.danger : 90;
   const data = query.data?.ok ? query.data.data : null,
@@ -979,17 +981,58 @@ function PopoverContent(
               selected === "claude" || handoffActive(handoffOf(selected))
                 ? undefined
                 : () =>
-                    void act(async () => {
-                      const response = await requestHandoff({
-                        provider: selected as "codex" | "agy",
-                        target: account.id,
-                      });
-                      void handoffs.refetch();
-                      return response.result;
+                    setConfirmIdle({
+                      provider: selected as "codex" | "agy",
+                      id: account.id,
+                      alias: account.alias,
                     })
             }
           />
         ))}
+        {confirmIdle && confirmIdle.provider === selected && (
+          <View
+            accessibilityRole="alert"
+            style={{
+              gap: 6,
+              padding: 8,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: palette.line,
+            }}
+          >
+            <Text style={{ color: palette.text, fontSize: 12 }}>
+              {handoffEffect(
+                confirmIdle.provider,
+                confirmIdle.alias,
+                handoffPrefs.status === "ready" &&
+                  handoffPrefs.values.restartCodexDaemon,
+                handoffPrefs.status === "ready"
+                  ? handoffPrefs.values.idleWaitMinutes
+                  : 30,
+              )}
+            </Text>
+            <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+              <Button
+                label="Switch when idle"
+                a11yLabel={`Confirm: switch ${providerLabel[confirmIdle.provider]} to ${confirmIdle.alias} when idle`}
+                disabled={busy}
+                onPress={() => {
+                  const chosen = confirmIdle;
+                  setConfirmIdle(null);
+                  void act(async () => {
+                    const response = await requestHandoff({
+                      provider: chosen.provider,
+                      target: chosen.id,
+                    });
+                    void handoffs.refetch();
+                    return response.result;
+                  });
+                }}
+              />
+              <Button label="Cancel" onPress={() => setConfirmIdle(null)} />
+            </View>
+          </View>
+        )}
         {selected === "codex" && (
           <Text style={{ color: palette.muted, fontSize: 12, padding: 6 }}>
             Open Codex terminals keep their account until restarted. When idle

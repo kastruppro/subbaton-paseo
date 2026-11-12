@@ -33,6 +33,15 @@ export function HandoffSection({ hostId, colors }: { hostId: string; colors: Col
   return (
     <SettingsSection title="Coordinated handoff">
       <SettingsCard>
+        {data?.notice && (
+          <SettingsAction
+            label="Handoff state was reset"
+            hint={data.notice.message}
+            actionLabel="Dismiss"
+            disabled={busy}
+            onPress={() => void run("codex", "dismiss")}
+          />
+        )}
         {data && !data.agentApi && (
           <SettingsRow
             label="Agent API not seen yet"
@@ -53,7 +62,15 @@ export function HandoffSection({ hostId, colors }: { hostId: string; colors: Col
                   {h.phase}
                 </Text>
               </SettingsRow>
-              {actions.cancel && <SettingsAction label="Cancel the waiting handoff" actionLabel="Cancel" disabled={busy} onPress={() => void run(provider, "cancel")} />}
+              {actions.cancel && (
+                <SettingsAction
+                  label={h.phase === "reopening" ? "Stop reopening" : "Cancel the waiting handoff"}
+                  hint={h.phase === "reopening" && provider === "agy" ? "Closed agy agents stay closed; Reopen agents stays available." : undefined}
+                  actionLabel="Cancel"
+                  disabled={busy}
+                  onPress={() => void run(provider, "cancel")}
+                />
+              )}
               {actions.reopen && (
                 <SettingsAction
                   label="Closed agents"
@@ -83,11 +100,18 @@ export function HandoffSection({ hostId, colors }: { hostId: string; colors: Col
             onValueChange={(value) => void prefs.save({ ...prefs.values, reloadCodexAfterAutomaticSwitch: value }, prefs.revision)}
           />
           <SettingsSwitch
-            label="Restart the shared Codex daemon on When idle"
-            hint="Off by default. Passes --restart-daemon once every Paseo Codex agent is idle. Terminal Codex sessions attached to the daemon may need codex resume."
+            label="Restart the shared Codex daemon at the idle boundary"
+            hint="Off by default. Once every Paseo Codex agent is idle: --restart-daemon on When idle, and codex daemon restart while a restart is pending after an automatic switch. Terminal Codex sessions attached to the daemon may need codex resume."
             value={prefs.values.restartCodexDaemon}
             disabled={prefs.saving}
             onValueChange={(value) => void prefs.save({ ...prefs.values, restartCodexDaemon: value }, prefs.revision)}
+          />
+          <SettingsSwitch
+            label="Let automatic agy switches close idle Paseo agy agents"
+            hint="When running agy sessions are the only thing blocking an automatic agy switch, close Paseo's own idle agy agents, switch and reopen them. Terminal and desktop agy sessions are never stopped."
+            value={prefs.values.closeAgyForAutomaticSwitch}
+            disabled={prefs.saving}
+            onValueChange={(value) => void prefs.save({ ...prefs.values, closeAgyForAutomaticSwitch: value }, prefs.revision)}
           />
           <SettingsInput
             key={prefs.revision}

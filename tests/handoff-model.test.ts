@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handoffActions, handoffActive, handoffLine, handoffTone } from "../client/handoff-model.js";
+import { handoffActions, handoffActive, handoffEffect, handoffLine, handoffTone } from "../client/handoff-model.js";
 import type { Handoff } from "../shared/handoff.js";
 
 const base: Handoff = {
@@ -24,4 +24,16 @@ test("owner actions follow the phase", () => {
   assert.deepEqual(handoffActions({ ...stuck, reopened: ["a1", "a2"] }).reopen, false);
   assert.equal(handoffActive({ ...base, phase: "switching" }), true);
   assert.equal(handoffActive(null), false);
+});
+
+test("cancel is offered while waiting and reopening; the confirmation names the effect", () => {
+  assert.equal(handoffActions({ ...base, phase: "reopening", affected: ["a1"] }).cancel, true);
+  assert.equal(handoffActions({ ...base, phase: "switching" }).cancel, false);
+  assert.match(handoffLine({ ...base, trigger: "automaticSwitch" }), /automatic switch to home/);
+  const agy = handoffEffect("agy", "home", false, 30);
+  assert.match(agy, /closes those idle agy agents/);
+  assert.match(agy, /never stopped/);
+  assert.match(agy, /30 minutes/);
+  assert.match(handoffEffect("codex", "work", true, 5), /daemon is restarted/);
+  assert.match(handoffEffect("codex", "work", false, 5), /not restarted/);
 });

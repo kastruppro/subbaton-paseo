@@ -51,7 +51,8 @@ import {
 } from "./settings-model.js";
 import { keyboardFocus, providerLabel, relativeAge, timestamp } from "./display.js";
 import { HandoffSection } from "./handoff-section.js";
-import { handoffRequestRpc } from "../shared/handoff.js";
+import { handoffRequestRpc, handoffSettings } from "../shared/handoff.js";
+import { handoffEffect } from "./handoff-model.js";
 
 type Colors = PluginSurfaceProps["theme"]["colors"];
 const providers: Provider[] = ["claude", "codex", "agy"];
@@ -442,6 +443,8 @@ function PlanViewer({ provider, colors }: { provider: Provider; colors: Colors }
   const [details, setDetails] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const requestHandoff = useRpc(handoffRequestRpc);
+  const handoffPrefs = useSettings(handoffSettings);
+  const [confirmIdle, setConfirmIdle] = useState(false);
   const plan = useQuery({
     queryKey: ["subbaton-plan", provider],
     queryFn: () => read({ provider }),
@@ -475,12 +478,33 @@ function PlanViewer({ provider, colors }: { provider: Provider; colors: Colors }
                     <Button
                       label={`Switch to ${data.why.candidates.find((c) => c.id === data.why.proposedTarget)?.alias ?? "proposed account"} when idle`}
                       colors={colors}
-                      onPress={() =>
-                        void requestHandoff({ provider: "agy", target: data.why.proposedTarget! })
-                          .then((r) => setHint(r.result.message))
-                          .catch(() => setHint("The request did not reach the host."))
-                      }
+                      onPress={() => setConfirmIdle(true)}
                     />
+                    {confirmIdle && (
+                      <View accessibilityRole="alert" style={{ gap: 6 }}>
+                        <Text style={{ color: colors.foreground, fontSize: 13 }}>
+                          {handoffEffect(
+                            "agy",
+                            data.why.candidates.find((c) => c.id === data.why.proposedTarget)?.alias ?? "the proposed account",
+                            false,
+                            handoffPrefs.status === "ready" ? handoffPrefs.values.idleWaitMinutes : 30,
+                          )}
+                        </Text>
+                        <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+                          <Button
+                            label="Switch when idle"
+                            colors={colors}
+                            onPress={() => {
+                              setConfirmIdle(false);
+                              void requestHandoff({ provider: "agy", target: data.why.proposedTarget! })
+                                .then((r) => setHint(r.result.message))
+                                .catch(() => setHint("The request did not reach the host."));
+                            }}
+                          />
+                          <Button label="Cancel" colors={colors} onPress={() => setConfirmIdle(false)} />
+                        </View>
+                      </View>
+                    )}
                     {hint && <Text accessibilityLiveRegion="polite" style={{ color: colors.foregroundMuted, fontSize: 12 }}>{hint}</Text>}
                   </View>
                 )}

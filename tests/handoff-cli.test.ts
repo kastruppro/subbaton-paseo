@@ -72,8 +72,8 @@ test("agy process inventory is read-only and fails closed", async () => {
   assert.deepEqual(await service.agyProcesses(), {
     ok: true,
     processes: [
-      { pid: 11, kind: "cli", ancestors: [500, 1], complete: true },
-      { pid: 12, kind: "unknown", ancestors: [900], complete: false },
+      { pid: 11, kind: "cli", ancestors: [{ pid: 500, executable: "node" }, { pid: 1, executable: "launchd" }], complete: true },
+      { pid: 12, kind: "unknown", ancestors: [{ pid: 900, executable: "zsh" }], complete: false },
       { pid: 13, kind: "desktop", ancestors: null, complete: false },
     ],
   });

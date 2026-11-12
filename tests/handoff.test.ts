@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   HandoffCoordinator,
   paseoAgentPort,
+  paseoAnchorPid,
   type AgentSnapshot,
   type AgyProcessInfo,
   type HandoffCli,
@@ -26,8 +27,16 @@ class FakeAgents {
     this.reloads.push(id);
   }
 }
+// The process tree used in these tests: 500 is the Paseo daemon ("Paseo Helper"), whose parent 400
+// is a login shell; 900 is a terminal shell; 700 a shell the daemon started.
 const paseoPid = 500;
-const proc = (pid: number, ancestors: number[] | null = [paseoPid, 1], kind = "cli", complete = ancestors !== null): AgyProcessInfo => ({ pid, kind, ancestors, complete });
+const names: Record<number, string> = { 500: "Paseo Helper", 400: "zsh", 900: "zsh", 700: "sh", 1: "launchd" };
+const proc = (pid: number, ancestors: number[] | null = [paseoPid, 400, 1], kind = "cli", complete = ancestors !== null): AgyProcessInfo => ({
+  pid,
+  kind,
+  ancestors: ancestors?.map((a) => ({ pid: a, executable: names[a] ?? null })) ?? null,
+  complete,
+});
 class FakeCli implements HandoffCli {
   switches: { provider: string; target: string; options: SwitchOptions }[] = [];
   processes: AgyProcessInfo[] | null = [];
@@ -106,7 +115,7 @@ const setup = (settings: Partial<HandoffSettings> = {}, initial: unknown = null,
       let n = 0;
       return () => `h${++n}`;
     })(),
-    { paseoPids: [paseoPid, 400], ...options },
+    { paseoAnchor: paseoPid, ...options },
   );
   return { cli, agents, store, coordinator, advance: (s: number) => (now += s) };
 };
@@ -114,7 +123,7 @@ const setup = (settings: Partial<HandoffSettings> = {}, initial: unknown = null,
 test("agy: waits for idle, stops only via the CLI, switches, then reloads only the affected agy agents", async () => {
   const { cli, agents, coordinator } = setup();
   agents.agents = [agent("a1", "antigravity"), agent("a2", "antigravity", "running", true), agent("c1", "codex"), agent("k1", "claude", "running", true)];
-  cli.processes = [proc(12), proc(11, [700, 400, 1])];
+  cli.processes = [proc(12), proc(11, [700, paseoPid, 400, 1])];
   assert.equal((await coordinator.request("agy", target)).result.outcome, "success");
   await coordinator.tick(agents);
   assert.equal(coordinator.status().handoffs.agy?.phase, "waiting");
@@ -495,6 +504,7 @@ test("agy: an incomplete ancestor chain without the Paseo PID is unattributable;
   await coordinator.request("agy", target);
   await coordinator.tick(agents);
   assert.equal(coordinator.status().handoffs.agy?.code, "attributionUnknown");
+  agents.agents = [agent("a1", "antigravity"), agent("a2", "antigravity")];
   cli.processes = [proc(11), proc(12, [900, paseoPid, 1], "cli", false)];
   cli.outcome = { kind: "notAllowed", code: "processesNotAllowed", message: "x" };
   await coordinator.tick(agents);
@@ -613,5 +623,57 @@ test("Codex daemon: a pending flag without an event is picked up; a failed resta
   quiet.cli.daemonPending = true;
   await quiet.coordinator.tick(quiet.agents);
   assert.equal(quiet.cli.pendingReads, 0, "setting off: never read or restarted");
+});
+
+test("RH1: a terminal agy that shares the daemon's parent is outside Paseo; nothing is stopped", async () => {
+  const { cli, agents, coordinator } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  // The owner started the daemon from shell 400 and also runs agy from that shell.
+  cli.processes = [proc(11), proc(12, [400, 1])];
+  await coordinator.request("agy", target);
+  await coordinator.tick(agents);
+  const h = coordinator.status().handoffs.agy!;
+  assert.equal(h.phase, "waiting");
+  assert.equal(h.code, "agyOutsidePaseo");
+  assert.equal(cli.switches.length, 0);
+});
+
+test("RH1: an anchor that is not the Paseo daemon (shell, tmux, terminal, launchd, unknown) is never trusted", async () => {
+  for (const executable of ["zsh", "tmux", "Terminal", "iTerm2", "launchd", "login", "node", null]) {
+    const { cli, agents, coordinator } = setup({}, null, false, { paseoAnchor: 400 });
+    agents.agents = [agent("a1", "antigravity")];
+    cli.processes = [{ pid: 11, kind: "cli", ancestors: [{ pid: 400, executable }, { pid: 1, executable: "launchd" }], complete: true }];
+    await coordinator.request("agy", target);
+    await coordinator.tick(agents);
+    const h = coordinator.status().handoffs.agy!;
+    assert.equal(h.phase, "waiting", String(executable));
+    assert.equal(h.code, "anchorUnverified");
+    assert.equal(cli.switches.length, 0);
+  }
+  const none = setup({}, null, false, { paseoAnchor: null });
+  none.agents.agents = [agent("a1", "antigravity")];
+  none.cli.processes = [proc(11)];
+  await none.coordinator.request("agy", target);
+  await none.coordinator.tick(none.agents);
+  assert.equal(none.coordinator.status().handoffs.agy?.code, "anchorUnverified");
+});
+
+test("RH1: the anchor is the forking daemon (ppid) for a forked plugin, the process itself otherwise", () => {
+  assert.equal(paseoAnchorPid({ pid: 50, ppid: 40, forked: true }), 40);
+  assert.equal(paseoAnchorPid({ pid: 50, ppid: 40, forked: false }), 50);
+  assert.equal(paseoAnchorPid({ pid: 50, ppid: 1, forked: true }), null, "reparented to launchd: the daemon is gone");
+});
+
+test("RH2: more Paseo agy processes than idle Paseo agy agents waits", async () => {
+  const { cli, agents, coordinator } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [proc(11), proc(12)];
+  await coordinator.request("agy", target);
+  await coordinator.tick(agents);
+  const h = coordinator.status().handoffs.agy!;
+  assert.equal(h.phase, "waiting");
+  assert.equal(h.code, "extraPaseoProcesses");
+  assert.match(h.message, /2 Paseo agy processes/);
+  assert.equal(cli.switches.length, 0);
 });
 

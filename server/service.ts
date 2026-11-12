@@ -702,10 +702,15 @@ export class SubBatonService {
       const row = (raw ?? {}) as { pid?: unknown; kind?: unknown; ancestors?: unknown; ancestorsComplete?: unknown };
       const own = pidValue(row.pid);
       if (own === null) return { ok: false };
-      let ancestors: number[] | null = null;
+      let ancestors: AgyProcessInfo["ancestors"] = null;
       if (Array.isArray(row.ancestors) && row.ancestors.length <= 64) {
-        const chain = row.ancestors.map((a) => pidValue((a as { pid?: unknown } | null)?.pid));
-        if (chain.every((v) => v !== null)) ancestors = chain as number[];
+        const chain = row.ancestors.map((a) => {
+          const entry = (a ?? {}) as { pid?: unknown; executable?: unknown };
+          const id = pidValue(entry.pid);
+          const executable = typeof entry.executable === "string" && entry.executable.length > 0 && entry.executable.length <= 255 ? entry.executable : null;
+          return id === null ? null : { pid: id, executable };
+        });
+        if (chain.every((v) => v !== null)) ancestors = chain as NonNullable<AgyProcessInfo["ancestors"]>;
       }
       parsed.push({
         pid: own,

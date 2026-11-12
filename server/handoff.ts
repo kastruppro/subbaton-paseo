@@ -42,8 +42,8 @@ export interface SwitchOutcome {
 export interface AgyProcessInfo {
   pid: number;
   kind: string;
-  /** Parent first, up to launchd. */
-  ancestors: number[] | null;
+  /** Parent first, up to launchd; executable is the CLI-reported basename (null when unreadable). */
+  ancestors: { pid: number; executable: string | null }[] | null;
   /** True only when the chain reached PID 1, so a missing Paseo PID really means "not Paseo's". */
   complete: boolean;
 }
@@ -74,8 +74,8 @@ export interface HandoffStore {
   setAside?(): Promise<string | null>;
 }
 export interface CoordinatorOptions {
-  /** The Paseo daemon side of the process tree: this plugin process and its parent. */
-  paseoPids?: number[];
+  /** PID of the Paseo daemon, the process that spawns agents (see paseoAnchorPid); null: none known. */
+  paseoAnchor?: number | null;
   listTimeoutMs?: number;
   reloadTimeoutMs?: number;
   /** How long request/control wait for a running step before answering busy. */
@@ -97,6 +97,22 @@ const withTimeout = <T>(work: Promise<T>, ms: number): Promise<T> =>
     );
   });
 
+/**
+ * Review RH1: the process that spawns Paseo's agents. Paseo forks each plugin server from the daemon
+ * with an IPC channel (server/plugins/runtime.js in Paseo 0.15), so a forked plugin's parent is the
+ * daemon. Without that channel the plugin would run inside the daemon itself. A parent of PID 1
+ * means the daemon is gone. The anchor is still verified by its executable name before it is used.
+ */
+export function paseoAnchorPid(own: { pid: number; ppid: number; forked: boolean } = { pid: process.pid, ppid: process.ppid, forked: typeof process.send === "function" }): number | null {
+  const pid = own.forked ? own.ppid : own.pid;
+  return Number.isInteger(pid) && pid > 1 ? pid : null;
+}
+/**
+ * Executable basenames of the Paseo daemon as the CLI reports them (proc_pidpath). The desktop app's
+ * daemon runs as "Paseo Helper" (its title "Paseo Daemon" is not the executable). Shells, tmux,
+ * terminal apps, launchd and a generic "node" are never accepted; a daemon run another way fails closed.
+ */
+export const paseoDaemonExecutables = ["Paseo Helper", "Paseo"];
 const busyStatus = (a: AgentSnapshot) => a.activeTurn || a.status === "running" || a.status === "initializing";
 const terminal = (h: Handoff | null) => !h || !(activePhases as readonly string[]).includes(h.phase);
 const ok = (code: string, message: string): ActionResult => ({ outcome: "success", code, message });
@@ -114,7 +130,7 @@ export class HandoffCoordinator {
   private tickPort: AgentPort | null = null;
   private running = false;
   agentApiSeen = false;
-  private paseoPids: number[];
+  private paseoAnchor: number | null;
   private listTimeoutMs: number;
   private reloadTimeoutMs: number;
   private fastWaitMs: number;
@@ -127,7 +143,8 @@ export class HandoffCoordinator {
     private newId: () => string = () => crypto.randomUUID(),
     options: CoordinatorOptions = {},
   ) {
-    this.paseoPids = (options.paseoPids ?? [process.pid, process.ppid]).filter((pid) => Number.isInteger(pid) && pid > 1);
+    const anchor = options.paseoAnchor === undefined ? paseoAnchorPid() : options.paseoAnchor;
+    this.paseoAnchor = anchor !== null && Number.isInteger(anchor) && anchor > 1 ? anchor : null;
     this.listTimeoutMs = options.listTimeoutMs ?? 10_000;
     this.reloadTimeoutMs = options.reloadTimeoutMs ?? 60_000;
     this.fastWaitMs = options.fastWaitMs ?? 2_000;
@@ -505,7 +522,18 @@ export class HandoffCoordinator {
         return;
       }
       // Review H1: only processes whose ancestry runs through the Paseo daemon are Paseo's.
-      const ours = (p: AgyProcessInfo) => !!p.ancestors?.some((pid) => this.paseoPids.includes(pid));
+      // Review RH1: only the daemon itself anchors attribution, and only if the CLI names it as Paseo.
+      const anchor = this.paseoAnchor;
+      const seen = inventory.processes.flatMap((p) => p.ancestors ?? []).filter((a) => a.pid === anchor);
+      if (inventory.processes.length > 0 && (anchor === null || seen.some((a) => !a.executable || !paseoDaemonExecutables.includes(a.executable)))) {
+        this.update(h, {
+          waitingFor: inventory.processes.length,
+          code: "anchorUnverified",
+          message: `SubBaton could not confirm which process is the Paseo daemon${seen[0]?.executable ? ` (found ${seen[0].executable.slice(0, 64)})` : ""}, so it cannot tell Paseo's agy sessions from terminal ones. Waiting; nothing is stopped.`,
+        });
+        return;
+      }
+      const ours = (p: AgyProcessInfo) => !!p.ancestors?.some((a) => a.pid === anchor);
       const paseo = inventory.processes.filter(ours);
       // A chain that stopped early (unreadable parent, cycle, 32-entry bound) proves nothing.
       const unknown = inventory.processes.filter((p) => !ours(p) && (p.ancestors === null || !p.complete));
@@ -525,6 +553,16 @@ export class HandoffCoordinator {
       if (paseo.length > 0 && paseo.length < affected.length) {
         // Fail closed until live tests show idle Paseo agy agents may run without a process.
         this.update(h, { waitingFor: affected.length - paseo.length, code: "attributionIncomplete", message: "Some idle Paseo agy agents have no matching agy process. Waiting rather than guessing." });
+        return;
+      }
+      if (paseo.length > affected.length) {
+        // Review RH2: an extra Paseo process (an errored or orphaned runtime) would be stopped and never
+        // reopened. Fail closed until live tests show where extra processes come from.
+        this.update(h, {
+          waitingFor: paseo.length - affected.length,
+          code: "extraPaseoProcesses",
+          message: `${paseo.length} Paseo agy processes run for ${affected.length} idle Paseo agy ${affected.length === 1 ? "agent" : "agents"}. SubBaton would stop the extra ones without reopening anything, so it waits. Close agy agents in an error state or restart Paseo.`,
+        });
         return;
       }
       if (paseo.length > 0) options.onlyPids = paseo.map((p) => p.pid).sort((a, b) => a - b);

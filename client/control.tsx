@@ -647,10 +647,13 @@ export function ControlScreen(props: PluginSurfaceProps) {
         await reload();
       },
     });
-  const pinnedText = (pins: Record<string, string> | null | undefined) =>
+  // poller status: {} = nothing pinned, null = not installed or the plist could not be read.
+  const pinnedText = (pins: Record<string, string> | null | undefined, installed: boolean | null | undefined) =>
     pins && Object.keys(pins).length
       ? Object.entries(pins).map(([k, v]) => `${k}=${v}`).join(", ")
-      : "none (default provider homes)";
+      : pins || installed === false
+        ? "none (default provider homes)"
+        : "unknown (the installed job could not be read)";
   const lifecycle = (install: boolean) => {
     const run = (environment: "keep" | "current" | "none") => async () => {
       setNotices((n) => ({ ...n, poller: null }));
@@ -660,10 +663,11 @@ export function ControlScreen(props: PluginSurfaceProps) {
       await reload();
     };
     const pins = poller.data?.ok ? poller.data.data?.pinnedEnvironment : null;
+    const installed = poller.data?.ok ? poller.data.data?.installed : null;
     setConfirm({
       title: install ? "Install the usage poller?" : "Uninstall the usage poller?",
       body: install
-        ? `Installs the per-user LaunchAgent on the Mac with the SubBaton binary this plugin verified. Pinned provider homes now: ${pinnedText(pins)}. Install keeps them. Re-pinning uses the Paseo daemon's environment, which can differ from your shell; only do that if you know it is right.`
+        ? `Installs the per-user LaunchAgent on the Mac with the SubBaton binary this plugin verified. Pinned provider homes now: ${pinnedText(pins, installed)}. Install keeps them. Re-pinning uses the Paseo daemon's environment, which can differ from your shell; only do that if you know it is right.`
         : "Removes the per-user LaunchAgent on the Mac. Saved accounts, caches and logs are kept.",
       confirm: install ? "Install (keep pinned homes)" : "Uninstall",
       notice: "poller",
@@ -856,7 +860,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
               >
                 {pollerData.stale && pollerData.installed && <Badge text="Stale" colors={colors} tone="warning" />}
               </SettingsRow>
-              <SettingsRow label="Pinned provider homes" hint={pinnedText(pollerData.pinnedEnvironment)} />
+              <SettingsRow label="Pinned provider homes" hint={pinnedText(pollerData.pinnedEnvironment, pollerData.installed)} />
               {providers.map((p) => {
                 const row = pollerData.providers[p];
                 return row ? (

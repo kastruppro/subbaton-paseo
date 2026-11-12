@@ -1,6 +1,6 @@
 # SubBaton for Paseo
 
-A compact subscription-usage footer, account popover and manual CLI actions for Claude, Codex and agy. React Native client surfaces support desktop/mobile; the server uses a bounded execFile bridge and a 15-second cache of `subbaton status --json`.
+A compact subscription-usage footer, account popover, manual CLI actions and a full SubBaton settings screen (every CLI setting, poller, events and the automatic plan) for Claude, Codex and agy. React Native client surfaces support desktop/mobile; the server uses a bounded execFile bridge and a 15-second cache of `subbaton status --json`.
 
 Owner setup: [docs/install.md](docs/install.md). Disposable-user gates: [docs/live-tests-plugin.md](docs/live-tests-plugin.md). Scope and SDK decisions: [docs/decisions.md](docs/decisions.md).
 
@@ -15,3 +15,5 @@ Tests use a fake CLI. Build checks separate browser-safe client and Node server 
 
 
 Before every actual CLI run the plugin checks canonical ownership/permissions of the binary and all parents, then its Developer ID/team/identifier. PATH lookup is explicit opt-in, off by default. Abnormal mutations require recovery inspection; status/configuration failures have a short negative cache. Named switches accept known UUIDs only. Unknown schema additions remain visible as unknown/read-only. The footer stays on one measured line; SDK 0.15.3 still requires host-scoped preferences.
+
+Phase 6b settings: the "SubBaton settings" screen renders every field from `subbaton settings get --json` metadata and sends one provider batch per Apply through `settings set --json-input -` (stdin, expected revision required). Release/resume actions, poller install/uninstall, events and `auto plan` use fixed allowlisted argv. See docs/decisions.md.

@@ -1,3 +1,4 @@
+import type { PluginTheme } from "@getpaseo/plugin";
 import type {
   Status,
   DisplaySettings,
@@ -238,18 +239,25 @@ export function windowPresentation(
   offline = false,
   now = Date.now() / 1000,
 ) {
+  const passed =
+    !window.inferred && window.resetsAt !== null && window.resetsAt <= now;
   const old = stale(window, offline, now);
   const reset = window.inferred
     ? "reset, presumed fresh"
-    : relativeReset(window.resetsAt, now);
+    : passed
+      ? "reset passed, refresh to update"
+      : relativeReset(window.resetsAt, now);
   return {
-    percent: percentText(window.usedPercent, old, window.inferred),
+    percent: passed
+      ? "—"
+      : percentText(window.usedPercent, old, window.inferred),
+    fillPercent: passed ? 0 : (window.usedPercent ?? 0),
     clock: old,
     opacity: old ? 0.45 : 1,
     tone: severity(window.usedPercent, false, warning, danger),
-    tick: paceFraction(provider, window, now),
+    tick: passed ? null : paceFraction(provider, window, now),
     reset,
-    accessibility: `${window.label}: ${percentText(window.usedPercent, old, window.inferred)} used${old ? ", stale reading" : ""}. ${reset}. Absolute reset ${timestamp(window.resetsAt)}. Last read ${relativeAge(window.fetchedAt, now)} (${timestamp(window.fetchedAt !== null && window.fetchedAt > 0 ? window.fetchedAt : null)}).`,
+    accessibility: `${window.label}: ${passed ? "unknown after reset" : percentText(window.usedPercent, old, window.inferred)} used${old ? ", stale reading" : ""}. ${reset}. Absolute reset ${timestamp(window.resetsAt)}. Last read ${relativeAge(window.fetchedAt, now)} (${timestamp(window.fetchedAt !== null && window.fetchedAt > 0 ? window.fetchedAt : null)}).`,
   };
 }
 export function splitWindows(provider: Provider, windows: Window[]) {
@@ -329,4 +337,68 @@ export function popoverBodyHeight(compact: boolean, height: number) {
     80,
     Math.min(470, viewport * (compact ? 0.78 : 1) - (compact ? 110 : 160)),
   );
+}
+
+export function themePalette(theme: PluginTheme) {
+  const c = theme.colors;
+  return {
+    sidebar: c.surface0,
+    pop: c.surface1,
+    row: c.surface1,
+    hover: c.surface2,
+    line: c.border,
+    text: c.foreground,
+    muted: c.foregroundMuted,
+    faint: c.foregroundMuted,
+    ok: c.statusSuccess,
+    warning: c.statusWarning,
+    danger: c.statusDanger,
+    track: c.surface2,
+    focus: c.accent,
+    tick: c.foreground,
+  };
+}
+export function keyboardFocus(target: unknown): boolean {
+  try {
+    return !!(target as { matches?: (selector: string) => boolean })?.matches?.(
+      ":focus-visible",
+    );
+  } catch {
+    return false;
+  }
+}
+export function actionNotice(
+  result: import("../shared/contracts.js").ActionResult,
+): string | null {
+  if (result.outcome !== "error" && result.outcome !== "uncertain") return null;
+  if (result.outcome === "uncertain")
+    return (
+      result.message.split(/[\r\n]/)[0].slice(0, 110) +
+      " Run SubBaton recovery before retrying."
+    );
+  return result.message.split(/[\r\n]/)[0].slice(0, 180);
+}
+export function shortWarning(
+  provider: Provider,
+  status: string | null | undefined,
+  warnings: string[] = [],
+): string | null {
+  if (provider === "agy" && status === "partial-groups")
+    return "Gemini quota not reported by Google";
+  if (status) return "Quota summary unavailable; some readings are stale";
+  return warnings.length ? "Account needs attention; expand for details" : null;
+}
+
+export function providerNotices(
+  previous: Partial<Record<Provider, string>>,
+  rows: {
+    provider: Provider | null;
+    result: import("../shared/contracts.js").ActionResult;
+  }[],
+  requested: Provider,
+) {
+  const next = { ...previous };
+  for (const row of rows)
+    next[row.provider ?? requested] = actionNotice(row.result) ?? undefined;
+  return next;
 }

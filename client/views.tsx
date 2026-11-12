@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -13,7 +13,7 @@ import {
   type PluginPopoverProps,
   type PluginSidebarItemProps,
 } from "@getpaseo/plugin/client";
-import { Icon, SidebarRow } from "@getpaseo/plugin/client/ui";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import {
   displaySettings,
   switchRpc,
@@ -42,25 +42,18 @@ import {
   relativeAge,
   lastRead,
   popoverBodyHeight,
+  themePalette,
+  keyboardFocus,
+  providerNotices,
+  shortWarning,
 } from "./display.js";
 import { useStatus } from "./use-status.js";
-const palette = {
-  sidebar: "#161618",
-  pop: "#1e1e21",
-  row: "#252529",
-  hover: "#2b2b30",
-  line: "#313137",
-  text: "#ececef",
-  muted: "#8d8d96",
-  faint: "#5c5c64",
-  ok: "#52b788",
-  warning: "#e3a33b",
-  danger: "#e4604e",
-  track: "#34343b",
-  focus: "#6d9eff",
-  tick: "#c9c9d1",
-};
-const toneColor = (tone: string) =>
+type Palette = ReturnType<typeof themePalette>;
+const PaletteContext = createContext<Palette | null>(null);
+function usePalette() {
+  return useContext(PaletteContext)!;
+}
+const toneColor = (tone: string, palette: Palette) =>
   tone === "danger"
     ? palette.danger
     : tone === "warning"
@@ -68,7 +61,6 @@ const toneColor = (tone: string) =>
       : tone === "normal"
         ? palette.ok
         : palette.faint;
-const providerColor = { claude: "#d9a06b", codex: "#9aa7b8", agy: "#7fb0ff" };
 function Meter({
   window,
   warning = 75,
@@ -83,9 +75,15 @@ function Meter({
   offline?: boolean;
   showBar?: boolean;
 }) {
+  const palette = usePalette();
+  const passed =
+    window &&
+    !window.inferred &&
+    window.resetsAt !== null &&
+    window.resetsAt <= Date.now() / 1000;
   const old = window ? stale(window, offline) : true,
-    value = window?.usedPercent ?? null;
-  const color = toneColor(severity(value, false, warning, danger));
+    value = passed ? null : (window?.usedPercent ?? null);
+  const color = toneColor(severity(value, false, warning, danger), palette);
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
       {showBar && (
@@ -121,13 +119,27 @@ function Meter({
     </View>
   );
 }
-export function Footer({
+export function Footer(
+  props: PluginSidebarItemProps & {
+    Details: React.ComponentType<PluginPopoverProps>;
+  },
+) {
+  return (
+    <PaletteContext.Provider value={themePalette(props.theme)}>
+      <FooterContent {...props} />
+    </PaletteContext.Provider>
+  );
+}
+function FooterContent({
   Details,
   ...props
 }: PluginSidebarItemProps & {
   Details: React.ComponentType<PluginPopoverProps>;
 }) {
-  const [width, setWidth] = useState(0);
+  const palette = usePalette();
+  const [width, setWidth] = useState(0),
+    [hovered, setHovered] = useState(false),
+    [focused, setFocused] = useState(false);
   const query = useStatus(props.host.id),
     settings = useSettings(displaySettings);
   const data = query.data?.ok ? query.data.data : null;
@@ -143,17 +155,31 @@ export function Footer({
       style={{
         alignSelf: "stretch",
         minWidth: 0,
-        backgroundColor: palette.sidebar,
+        backgroundColor: hovered ? palette.hover : "transparent",
         borderTopWidth: 1,
-        borderTopColor: "#232327",
+        borderTopColor: palette.line,
       }}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
-      <SidebarRow
-        icon="Gauge"
-        label=""
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open SubBaton subscription usage"
+        onFocus={(event) => setFocused(keyboardFocus(event.currentTarget))}
+        onBlur={() => setFocused(false)}
+        onPressIn={(event) => setFocused(keyboardFocus(event.currentTarget))}
         onPress={() => props.openPopover(Details)}
-        trailing={
+        style={{
+          paddingHorizontal: 12,
+          paddingVertical: 4,
+          minHeight: 36,
+          borderWidth: 1,
+          borderColor: focused ? palette.focus : "transparent",
+          borderRadius: 6,
+        }}
+      >
+        {
           <View
             accessible
             accessibilityLabel={
@@ -201,7 +227,7 @@ export function Footer({
                   <Icon
                     name={providerIcon[item.provider]}
                     size={13}
-                    color={providerColor[item.provider]}
+                    color={palette.muted}
                   />
                   <Text
                     numberOfLines={1}
@@ -260,7 +286,7 @@ export function Footer({
             )}
           </View>
         }
-      />
+      </Pressable>
     </View>
   );
 }
@@ -281,6 +307,7 @@ function Button({
   small?: boolean;
   a11yLabel?: string;
 }) {
+  const palette = usePalette();
   const [focused, setFocused] = useState(false),
     [hovered, setHovered] = useState(false);
   return (
@@ -289,8 +316,9 @@ function Button({
       accessibilityLabel={a11yLabel ?? label}
       accessibilityState={{ disabled }}
       disabled={disabled}
-      onFocus={() => setFocused(true)}
+      onFocus={(event) => setFocused(keyboardFocus(event.currentTarget))}
       onBlur={() => setFocused(false)}
+      onPressIn={(event) => setFocused(keyboardFocus(event.currentTarget))}
       onHoverIn={() => setHovered(true)}
       onHoverOut={() => setHovered(false)}
       onPress={(event) => {
@@ -342,6 +370,7 @@ function PaceBar({
   danger: number;
   offline: boolean;
 }) {
+  const palette = usePalette();
   const view = windowPresentation(provider, window, warning, danger, offline);
   const label = compactWindowLabel(provider, window),
     value = window.usedPercent;
@@ -363,8 +392,8 @@ function PaceBar({
           accessibilityRole="progressbar"
           accessibilityLabel={view.accessibility}
           accessibilityValue={
-            value === null
-              ? { text: "unknown" }
+            value === null || view.percent === "—"
+              ? { text: view.reset }
               : { min: 0, max: 100, now: value }
           }
           style={{
@@ -380,9 +409,9 @@ function PaceBar({
               left: 0,
               top: 0,
               bottom: 0,
-              width: `${Math.max(0, Math.min(100, value ?? 0))}%`,
+              width: `${Math.max(0, Math.min(100, view.fillPercent))}%`,
               borderRadius: 3,
-              backgroundColor: toneColor(view.tone),
+              backgroundColor: toneColor(view.tone, palette),
               opacity: view.opacity,
             }}
           />
@@ -454,6 +483,7 @@ function AccountRow({
   busy: boolean;
   onSwitch: () => void;
 }) {
+  const palette = usePalette();
   const [open, setOpen] = useState(false),
     [focused, setFocused] = useState(false),
     [hovered, setHovered] = useState(false);
@@ -461,7 +491,7 @@ function AccountRow({
     read = lastRead(account);
   const dot =
     account.active || account.health !== "ok"
-      ? toneColor(accountTone(account, warning, danger))
+      ? toneColor(accountTone(account, warning, danger), palette)
       : palette.faint;
   const details = [
     ["Account", account.email ?? "Email unknown"],
@@ -496,7 +526,7 @@ function AccountRow({
         borderColor: focused
           ? palette.focus
           : account.active
-            ? "#33473d"
+            ? palette.ok
             : "transparent",
         borderRadius: 8,
         backgroundColor: hovered ? palette.hover : palette.row,
@@ -518,8 +548,9 @@ function AccountRow({
             event.stopPropagation();
             toggle();
           }}
-          onFocus={() => setFocused(true)}
+          onFocus={(event) => setFocused(keyboardFocus(event.currentTarget))}
           onBlur={() => setFocused(false)}
+          onPressIn={(event) => setFocused(keyboardFocus(event.currentTarget))}
           onHoverIn={() => setHovered(true)}
           onHoverOut={() => setHovered(false)}
           style={{
@@ -538,9 +569,7 @@ function AccountRow({
               borderRadius: 7,
               alignItems: "center",
               justifyContent: "center",
-              backgroundColor: account.active
-                ? "rgba(82,183,136,0.15)"
-                : "transparent",
+              backgroundColor: account.active ? palette.hover : "transparent",
               borderWidth: account.active ? 1 : 0,
               borderColor: palette.ok,
             }}
@@ -600,11 +629,20 @@ function AccountRow({
           {account.usageStatus}
         </Text>
       )}
-      {account.warnings?.map((warning, index) => (
-        <Text key={index} style={{ color: palette.warning, fontSize: 11 }}>
-          {warning}
-        </Text>
-      ))}
+      {shortWarning(provider, account.summaryStatus, account.warnings) && (
+        <View
+          style={{ flexDirection: "row", gap: 4, alignItems: "center" }}
+          accessibilityLabel={(account.warnings ?? []).join(". ")}
+        >
+          <Icon name="TriangleAlert" size={12} color={palette.warning} />
+          <Text
+            numberOfLines={1}
+            style={{ color: palette.warning, fontSize: 11, flex: 1 }}
+          >
+            {shortWarning(provider, account.summaryStatus, account.warnings)}
+          </Text>
+        </View>
+      )}
       <View>
         {windows.main.map((window) => (
           <PaceBar
@@ -628,6 +666,14 @@ function AccountRow({
             gap: 5,
           }}
         >
+          {account.warnings?.map((text, index) => (
+            <Text
+              key={`warning-${index}`}
+              style={{ fontSize: 12, color: palette.warning }}
+            >
+              {text}
+            </Text>
+          ))}
           {details.map(([label, value]) => (
             <View key={label} style={{ flexDirection: "row", gap: 10 }}>
               <Text style={{ width: 86, color: palette.muted, fontSize: 12 }}>
@@ -664,42 +710,50 @@ function AccountRow({
 export function AccountPopover(
   props: PluginPopoverProps & { openSettings: () => void },
 ) {
+  return (
+    <PaletteContext.Provider value={themePalette(props.theme)}>
+      <PopoverContent {...props} />
+    </PaletteContext.Provider>
+  );
+}
+function PopoverContent(
+  props: PluginPopoverProps & { openSettings: () => void },
+) {
+  const palette = usePalette();
   const { height } = useWindowDimensions();
   const query = useStatus(props.host.id),
     switchAccount = useRpc(switchRpc),
     strategy = useRpc(strategyRpc),
     refresh = useRpc(refreshRpc);
   const [busy, setBusy] = useState(false),
-    [notice, setNotice] = useState<{ text: string; uncertain: boolean } | null>(
-      null,
-    ),
+    [notices, setNotices] = useState<Partial<Record<Provider, string>>>({}),
     [selected, setSelected] = useState<Provider>("claude");
   const display = useSettings(displaySettings);
   const warning = display.status === "ready" ? display.values.warning : 75,
     danger = display.status === "ready" ? display.values.danger : 90;
   const data = query.data?.ok ? query.data.data : null,
     provider = data?.providers.find((value) => value.provider === selected);
-  async function act(action: () => Promise<ActionResult | ActionResult[]>) {
+  async function act(
+    action: () => Promise<
+      ActionResult | { provider: Provider | null; result: ActionResult }[]
+    >,
+  ) {
     if (busy) return;
+    const requested = selected;
     setBusy(true);
-    setNotice(null);
+    setNotices((previous) => ({ ...previous, [requested]: undefined }));
     try {
-      const value = await action(),
-        results = Array.isArray(value) ? value : [value];
-      setNotice({
-        text: results.length
-          ? results.map((result) => result.message).join("\n")
-          : "No active accounts in snapshots. Bootstrap provider lists first.",
-        uncertain: results.some(
-          (result) =>
-            result.outcome === "uncertain" || result.outcome === "error",
-        ),
-      });
+      const value = await action();
+      const rows = Array.isArray(value)
+        ? value
+        : [{ provider: requested, result: value }];
+      setNotices((previous) => providerNotices(previous, rows, requested));
     } catch {
-      setNotice({
-        text: "The connection failed. Inspect SubBaton state before retrying a switch.",
-        uncertain: true,
-      });
+      setNotices((previous) => ({
+        ...previous,
+        [requested]:
+          "Connection lost; inspect SubBaton state/recovery before retrying.",
+      }));
     } finally {
       setBusy(false);
       await query.refetch();
@@ -734,7 +788,7 @@ export function AccountPopover(
           style={{
             flexDirection: "row",
             gap: 2,
-            backgroundColor: "#18181b",
+            backgroundColor: palette.sidebar,
             padding: 3,
             borderRadius: 8,
           }}
@@ -769,7 +823,16 @@ export function AccountPopover(
           <Text
             accessibilityLabel={`Updated ${relativeAge(provider?.updatedAt ?? null)}`}
             numberOfLines={2}
-            style={{ color: palette.muted, fontSize: 11, flexShrink: 1 }}
+            style={{
+              color: palette.muted,
+              opacity:
+                provider?.updatedAt &&
+                Date.now() / 1000 - provider.updatedAt > 180
+                  ? 0.65
+                  : 1,
+              fontSize: 11,
+              flexShrink: 1,
+            }}
           >
             updated {relativeAge(provider?.updatedAt ?? null)}
           </Text>
@@ -778,14 +841,7 @@ export function AccountPopover(
             icon="RefreshCw"
             compact={props.layout.compact}
             disabled={busy}
-            onPress={() =>
-              void act(async () =>
-                (await refresh({})).map((value) => ({
-                  ...value.result,
-                  message: `${value.provider ? providerLabel[value.provider] : "SubBaton"}: ${value.result.message}`,
-                })),
-              )
-            }
+            onPress={() => void act(async () => await refresh({}))}
           />
         </View>
       </View>
@@ -797,16 +853,14 @@ export function AccountPopover(
           paddingBottom: 10,
         }}
       >
-        {notice && (
+        {notices[selected] && (
           <Text
+            numberOfLines={1}
             accessibilityLiveRegion="polite"
-            style={{
-              color: notice.uncertain ? palette.warning : palette.text,
-              fontSize: 12,
-              padding: 4,
-            }}
+            accessibilityLabel={notices[selected]}
+            style={{ color: palette.warning, fontSize: 12, padding: 4 }}
           >
-            {notice.text}
+            {notices[selected]}
           </Text>
         )}
         {(query.isError || query.data?.ok === false) && (
@@ -917,6 +971,7 @@ function ProviderTab({
   tone: string;
   onPress: () => void;
 }) {
+  const palette = usePalette();
   const [focused, setFocused] = useState(false);
   return (
     <Pressable
@@ -924,8 +979,9 @@ function ProviderTab({
       accessibilityLabel={`${providerLabel[id]}, status ${tone}`}
       accessibilityState={{ selected }}
       onPress={onPress}
-      onFocus={() => setFocused(true)}
+      onFocus={(event) => setFocused(keyboardFocus(event.currentTarget))}
       onBlur={() => setFocused(false)}
+      onPressIn={(event) => setFocused(keyboardFocus(event.currentTarget))}
       style={{
         flexDirection: "row",
         alignItems: "center",
@@ -944,7 +1000,7 @@ function ProviderTab({
           width: 6,
           height: 6,
           borderRadius: 3,
-          backgroundColor: toneColor(tone),
+          backgroundColor: toneColor(tone, palette),
         }}
       />
       <Text

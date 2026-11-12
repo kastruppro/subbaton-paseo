@@ -50,6 +50,8 @@ import {
   type FieldView,
 } from "./settings-model.js";
 import { keyboardFocus, providerLabel, relativeAge, timestamp } from "./display.js";
+import { HandoffSection } from "./handoff-section.js";
+import { handoffRequestRpc } from "../shared/handoff.js";
 
 type Colors = PluginSurfaceProps["theme"]["colors"];
 const providers: Provider[] = ["claude", "codex", "agy"];
@@ -438,6 +440,8 @@ function PlanViewer({ provider, colors }: { provider: Provider; colors: Colors }
   const read = useRpc(autoPlanRpc);
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const requestHandoff = useRpc(handoffRequestRpc);
   const plan = useQuery({
     queryKey: ["subbaton-plan", provider],
     queryFn: () => read({ provider }),
@@ -463,6 +467,23 @@ function PlanViewer({ provider, colors }: { provider: Provider; colors: Colors }
               <>
                 <Text style={{ color: colors.foreground, fontWeight: "600" }}>{summary.headline}</Text>
                 {data.pauseMessage && <Text style={{ color: colors.statusWarning }}>{data.pauseMessage}</Text>}
+                {provider === "agy" && data.decision.reason === "processBusy" && data.why.proposedTarget && (
+                  <View style={{ gap: 4 }}>
+                    <Text style={{ color: colors.foregroundMuted, fontSize: 13 }}>
+                      agy sessions block this plan. The CLI cannot tell from here whether a switch is due; you can hand off explicitly.
+                    </Text>
+                    <Button
+                      label={`Switch to ${data.why.candidates.find((c) => c.id === data.why.proposedTarget)?.alias ?? "proposed account"} when idle`}
+                      colors={colors}
+                      onPress={() =>
+                        void requestHandoff({ provider: "agy", target: data.why.proposedTarget! })
+                          .then((r) => setHint(r.result.message))
+                          .catch(() => setHint("The request did not reach the host."))
+                      }
+                    />
+                    {hint && <Text accessibilityLiveRegion="polite" style={{ color: colors.foregroundMuted, fontSize: 12 }}>{hint}</Text>}
+                  </View>
+                )}
                 {summary.lines.map((line) => (
                   <Text key={line} style={{ color: colors.foregroundMuted, fontSize: 13 }}>
                     {line}
@@ -889,6 +910,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
         </SettingsCard>
         <Notice result={notices.poller ?? null} colors={colors} />
       </SettingsSection>
+      <HandoffSection hostId={hostId} colors={colors} />
       <SettingsSection title="Recent events">
         <SettingsCard>
           {recent.length === 0 && (

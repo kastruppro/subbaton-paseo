@@ -137,3 +137,10 @@ test("settings screen uses only host theme tokens and labels every custom contro
     assert.match(p, /accessibilityLabel=/);
   }
 });
+test("handoff section and popover additions use only host theme tokens", async () => {
+  const { readFile } = await import("node:fs/promises");
+  for (const file of ["../client/handoff-section.tsx", "../client/views.tsx"]) {
+    const source = await readFile(new URL(file, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /#[0-9a-fA-F]{6}\b|rgba?\(|hsla?\(/, file);
+  }
+});

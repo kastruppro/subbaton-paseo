@@ -48,6 +48,9 @@ import {
   shortWarning,
 } from "./display.js";
 import { useStatus } from "./use-status.js";
+import { useHandoff } from "./use-handoff.js";
+import { handoffActive, handoffLine, handoffTone } from "./handoff-model.js";
+import { handoffRequestRpc } from "../shared/handoff.js";
 type Palette = ReturnType<typeof themePalette>;
 const PaletteContext = createContext<Palette | null>(null);
 function usePalette() {
@@ -473,6 +476,7 @@ function AccountRow({
   offline,
   busy,
   onSwitch,
+  onSwitchWhenIdle,
 }: {
   account: Account;
   provider: Provider;
@@ -482,6 +486,7 @@ function AccountRow({
   offline: boolean;
   busy: boolean;
   onSwitch: () => void;
+  onSwitchWhenIdle?: () => void;
 }) {
   const palette = usePalette();
   const [open, setOpen] = useState(false),
@@ -619,6 +624,22 @@ function AccountRow({
             onPress={onSwitch}
           />
         )}
+        {!account.active && onSwitchWhenIdle && (
+          <Button
+            label="When idle"
+            a11yLabel={`Switch to ${account.alias} when every Paseo ${providerLabel[provider]} agent is idle, then reopen them`}
+            compact={compact}
+            small
+            disabled={
+              busy ||
+              !account.enabled ||
+              ["quarantined", "deviceBlocked", "needsLogin"].includes(
+                account.health,
+              )
+            }
+            onPress={onSwitchWhenIdle}
+          />
+        )}
       </View>
       {(!account.enabled ||
         account.health !== "ok" ||
@@ -724,7 +745,9 @@ function PopoverContent(
   const query = useStatus(props.host.id),
     switchAccount = useRpc(switchRpc),
     strategy = useRpc(strategyRpc),
-    refresh = useRpc(refreshRpc);
+    refresh = useRpc(refreshRpc),
+    requestHandoff = useRpc(handoffRequestRpc),
+    handoffs = useHandoff(props.host.id);
   const [busy, setBusy] = useState(false),
     [notices, setNotices] = useState<Partial<Record<Provider, string>>>({}),
     [selected, setSelected] = useState<Provider>("claude");
@@ -733,6 +756,8 @@ function PopoverContent(
     danger = display.status === "ready" ? display.values.danger : 90;
   const data = query.data?.ok ? query.data.data : null,
     provider = data?.providers.find((value) => value.provider === selected);
+  const handoffOf = (p: Provider) =>
+    p === "claude" ? null : (handoffs.data?.handoffs[p] ?? null);
   async function act(
     action: () => Promise<
       ActionResult | { provider: Provider | null; result: ActionResult }[]
@@ -863,6 +888,21 @@ function PopoverContent(
             {notices[selected]}
           </Text>
         )}
+        {handoffOf(selected) && (
+          <Text
+            accessibilityLiveRegion="polite"
+            style={{
+              color:
+                handoffTone(handoffOf(selected)!) === "warning"
+                  ? palette.warning
+                  : palette.muted,
+              fontSize: 12,
+              padding: 4,
+            }}
+          >
+            {handoffLine(handoffOf(selected)!)}
+          </Text>
+        )}
         {(query.isError || query.data?.ok === false) && (
           <Text style={{ color: palette.warning, fontSize: 12, padding: 4 }}>
             {query.data?.error?.message ?? "Status unavailable on this host."}
@@ -935,16 +975,31 @@ function PopoverContent(
                 switchAccount({ provider: selected, target: account.id }),
               )
             }
+            onSwitchWhenIdle={
+              selected === "claude" || handoffActive(handoffOf(selected))
+                ? undefined
+                : () =>
+                    void act(async () => {
+                      const response = await requestHandoff({
+                        provider: selected as "codex" | "agy",
+                        target: account.id,
+                      });
+                      void handoffs.refetch();
+                      return response.result;
+                    })
+            }
           />
         ))}
         {selected === "codex" && (
           <Text style={{ color: palette.muted, fontSize: 12, padding: 6 }}>
-            Open Codex terminals keep their account until restarted.
+            Open Codex terminals keep their account until restarted. When idle
+            reloads Paseo Codex agents after the switch.
           </Text>
         )}
         {selected === "agy" && (
           <Text style={{ color: palette.muted, fontSize: 12, padding: 6 }}>
-            Stop agy before switching. Conversations resume with agy -c.
+            When idle closes idle Paseo agy agents, switches and reopens their
+            conversations. Terminal agy sessions must be finished first.
           </Text>
         )}
         <View style={{ alignSelf: "flex-start", marginTop: 4 }}>

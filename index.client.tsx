@@ -5,6 +5,7 @@ import type {
 } from "@getpaseo/plugin/client";
 import { AccountPopover, Footer } from "./client/views.js";
 import { SettingsScreen } from "./client/settings.js";
+import { ControlScreen } from "./client/control.js";
 export default function contribute(client: PluginClientContext) {
   function Details(props: PluginPopoverProps) {
     return (
@@ -28,8 +29,15 @@ export default function contribute(client: PluginClientContext) {
     icon: "Gauge",
     Component: SettingsScreen,
   });
+  const removeControl = client.addSettingsScreen({
+    id: "control",
+    title: "SubBaton settings",
+    icon: "SlidersHorizontal",
+    Component: ControlScreen,
+  });
   return () => {
     removeFooter();
     removeSettings();
+    removeControl();
   };
 }

@@ -126,3 +126,14 @@ test("refresh failures stay on their provider and successes clear old notices", 
   assert.ok(actionNotice(uncertain)?.includes("agy is running"));
   assert.ok(actionNotice(uncertain)?.includes("recovery"));
 });
+test("settings screen uses only host theme tokens and labels every custom control", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../client/control.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+  const pressables = source.match(/<Pressable\b[\s\S]*?>/g) ?? [];
+  assert.ok(pressables.length > 0);
+  for (const p of pressables) {
+    assert.match(p, /accessibilityRole=/);
+    assert.match(p, /accessibilityLabel=/);
+  }
+});

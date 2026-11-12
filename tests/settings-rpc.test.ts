@@ -10,6 +10,7 @@ import {
   revision,
   claudeSection,
   settingsDocument,
+  plan,
 } from "./settings-fixtures.js";
 import { status } from "./fixtures.js";
 
@@ -347,37 +348,6 @@ test("events validate since and return only known event fields", async () => {
     assert.equal((await service.events({ since })).ok, false);
   assert.equal(cli.calls.length, spawned);
 });
-
-export const plan = {
-  provider: "codex",
-  dryRun: true,
-  executionEnabled: false,
-  evaluatedAt: 100,
-  cacheOnly: true,
-  processState: "idle",
-  autoEnabled: true,
-  decision: { action: "switch", target: accountB, reason: "thresholdReached" },
-  why: {
-    candidates: [
-      { id: accountA, alias: "work", eligible: false, reasons: ["thresholdReached"], windows: [{ id: "codex:primary_window", kind: "5h", usedPercent: 97, threshold: { value: 95, source: "providerGlobal" }, fetchedAt: 90, resetsAt: 200, state: "fresh", inferred: false }], headroom: 0, accessTokenExpired: false, forecast: { priority: false } },
-      { id: accountB, alias: "home", eligible: true, reasons: [], windows: [], headroom: 60, accessTokenExpired: false, forecast: { window: "codex:secondary_window", remainingQuota: 40, predictedUnused: 10, resetAt: 300, priority: true } },
-    ],
-    rate: { confidence: "unknown", sampleCount: 0 },
-    effectiveStrategy: "best",
-    sequences: [{ order: [accountB, accountA], expiredQuota: 10.1 }],
-    sequenceBound: 4,
-    sequenceAccounts: [accountB],
-    weeklyPriorityAccounts: [accountB],
-    proposedTarget: accountB,
-    cooldown: { remainingSeconds: 0, overridden: false, passed: true },
-    margin: { required: 5, headroomImprovement: 60, passed: true },
-    finalReason: "thresholdReached",
-  },
-  auto: { paused: false, recentAutomaticSwitches: 0, flapLimit: 4, flapWindowSeconds: 3600, lastAutomaticSwitchAt: null },
-  sampleCount: 0,
-  limitations: ["CLI text"],
-  secret: "secret-token",
-};
 
 test("auto plan is read-only, provider-scoped and bounded", async () => {
   const { cli, service } = scripted();

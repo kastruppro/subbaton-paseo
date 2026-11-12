@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import {
   useRpc,
@@ -15,6 +21,8 @@ import {
   refreshRpc,
   type ActionResult,
   type Window,
+  type Account,
+  type Provider,
 } from "../shared/contracts.js";
 import {
   chooseItems,
@@ -27,10 +35,41 @@ import {
   windowTitle,
   stripLayout,
   shortWindowTitle,
+  windowPresentation,
+  splitWindows,
+  accountTone,
+  compactWindowLabel,
+  relativeAge,
+  lastRead,
+  popoverBodyHeight,
 } from "./display.js";
 import { useStatus } from "./use-status.js";
+const palette = {
+  sidebar: "#161618",
+  pop: "#1e1e21",
+  row: "#252529",
+  hover: "#2b2b30",
+  line: "#313137",
+  text: "#ececef",
+  muted: "#8d8d96",
+  faint: "#5c5c64",
+  ok: "#52b788",
+  warning: "#e3a33b",
+  danger: "#e4604e",
+  track: "#34343b",
+  focus: "#6d9eff",
+  tick: "#c9c9d1",
+};
+const toneColor = (tone: string) =>
+  tone === "danger"
+    ? palette.danger
+    : tone === "warning"
+      ? palette.warning
+      : tone === "normal"
+        ? palette.ok
+        : palette.faint;
+const providerColor = { claude: "#d9a06b", codex: "#9aa7b8", agy: "#7fb0ff" };
 function Meter({
-  theme,
   window,
   warning = 75,
   danger = 90,
@@ -46,15 +85,7 @@ function Meter({
 }) {
   const old = window ? stale(window, offline) : true,
     value = window?.usedPercent ?? null;
-  const level = severity(value, old, warning, danger),
-    color =
-      level === "danger"
-        ? theme.colors.statusDanger
-        : level === "warning"
-          ? theme.colors.statusWarning
-          : level === "unknown"
-            ? theme.colors.foregroundMuted
-            : theme.colors.accent;
+  const color = toneColor(severity(value, false, warning, danger));
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
       {showBar && (
@@ -63,7 +94,7 @@ function Meter({
             width: 24,
             height: 4,
             borderRadius: 2,
-            backgroundColor: theme.colors.border,
+            backgroundColor: palette.track,
           }}
         >
           <View
@@ -77,7 +108,14 @@ function Meter({
           />
         </View>
       )}
-      <Text numberOfLines={1} style={{ fontSize: 11, color, maxWidth: 34 }}>
+      <Text
+        numberOfLines={1}
+        style={{
+          fontSize: 12,
+          color: old ? palette.muted : palette.text,
+          maxWidth: 42,
+        }}
+      >
         {percentText(value, old, window?.inferred)}
       </Text>
     </View>
@@ -102,7 +140,13 @@ export function Footer({
   );
   return (
     <View
-      style={{ alignSelf: "stretch", minWidth: 0 }}
+      style={{
+        alignSelf: "stretch",
+        minWidth: 0,
+        backgroundColor: palette.sidebar,
+        borderTopWidth: 1,
+        borderTopColor: "#232327",
+      }}
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
       <SidebarRow
@@ -128,7 +172,7 @@ export function Footer({
               width: Math.max(0, width - 56),
               overflow: "hidden",
               alignItems: "center",
-              gap: 8,
+              gap: 14,
               paddingVertical: 4,
               flexShrink: 1,
             }}
@@ -156,14 +200,14 @@ export function Footer({
                 >
                   <Icon
                     name={providerIcon[item.provider]}
-                    size={12}
-                    color={props.theme.colors.foregroundMuted}
+                    size={13}
+                    color={providerColor[item.provider]}
                   />
                   <Text
                     numberOfLines={1}
                     style={{
-                      fontSize: 10,
-                      color: props.theme.colors.foregroundMuted,
+                      fontSize: 12,
+                      color: palette.muted,
                       maxWidth: line.labels ? 58 : 20,
                     }}
                   >
@@ -223,41 +267,404 @@ export function Footer({
 function Button({
   label,
   onPress,
-  theme,
   disabled = false,
+  compact = false,
+  icon,
+  small = false,
+  a11yLabel,
 }: {
   label: string;
   onPress: () => void;
-  theme: PluginTheme;
   disabled?: boolean;
+  compact?: boolean;
+  icon?: string;
+  small?: boolean;
+  a11yLabel?: string;
 }) {
+  const [focused, setFocused] = useState(false),
+    [hovered, setHovered] = useState(false);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={a11yLabel ?? label}
+      accessibilityState={{ disabled }}
       disabled={disabled}
-      onPress={onPress}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
+      onPress={(event) => {
+        event.stopPropagation();
+        onPress();
+      }}
       style={{
-        minHeight: 44,
-        minWidth: 44,
+        minHeight: compact ? 44 : small ? 24 : 28,
+        minWidth: compact ? 44 : icon ? 26 : 44,
         justifyContent: "center",
-        paddingHorizontal: 10,
-        paddingVertical: 9,
+        alignItems: "center",
+        paddingHorizontal: icon ? 4 : 9,
+        paddingVertical: compact ? 6 : 3,
         borderWidth: 1,
-        borderColor: theme.colors.border,
-        borderRadius: 6,
+        borderColor: focused
+          ? palette.focus
+          : icon
+            ? "transparent"
+            : palette.line,
+        borderRadius: 7,
+        backgroundColor: hovered
+          ? palette.hover
+          : icon
+            ? "transparent"
+            : palette.row,
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>
-        {label}
-      </Text>
+      {icon ? (
+        <Icon name={icon} size={14} color={palette.muted} />
+      ) : (
+        <Text style={{ color: palette.text, fontSize: 12, fontWeight: "500" }}>
+          {label}
+        </Text>
+      )}
+    </Pressable>
+  );
+}
+function PaceBar({
+  provider,
+  window,
+  warning,
+  danger,
+  offline,
+}: {
+  provider: Provider;
+  window: Window;
+  warning: number;
+  danger: number;
+  offline: boolean;
+}) {
+  const view = windowPresentation(provider, window, warning, danger, offline);
+  const label = compactWindowLabel(provider, window),
+    value = window.usedPercent;
+  return (
+    <View style={{ marginTop: 6, gap: 3 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <Text
+          numberOfLines={1}
+          style={{
+            width: provider === "agy" ? 66 : 52,
+            color: palette.muted,
+            fontSize: 12,
+          }}
+        >
+          {label}
+        </Text>
+        <View
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel={view.accessibility}
+          accessibilityValue={
+            value === null
+              ? { text: "unknown" }
+              : { min: 0, max: 100, now: value }
+          }
+          style={{
+            flex: 1,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: palette.track,
+          }}
+        >
+          <View
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: `${Math.max(0, Math.min(100, value ?? 0))}%`,
+              borderRadius: 3,
+              backgroundColor: toneColor(view.tone),
+              opacity: view.opacity,
+            }}
+          />
+          {view.tick !== null && (
+            <View
+              importantForAccessibility="no"
+              style={{
+                position: "absolute",
+                left: `${view.tick * 100}%`,
+                marginLeft: -1,
+                top: -3,
+                width: 2,
+                height: 12,
+                borderRadius: 1,
+                backgroundColor: palette.tick,
+                opacity: 0.75,
+              }}
+            />
+          )}
+        </View>
+        <Text
+          style={{
+            width: 42,
+            textAlign: "right",
+            fontSize: 13,
+            fontWeight: "500",
+            color: view.clock ? palette.muted : palette.text,
+            fontVariant: ["tabular-nums"],
+          }}
+        >
+          {view.percent}
+        </Text>
+      </View>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 3,
+          marginLeft: provider === "agy" ? 76 : 62,
+        }}
+      >
+        {view.clock && <Icon name="Clock" size={11} color={palette.muted} />}
+        <Text
+          accessibilityLabel={`${view.reset}. Absolute reset ${timestamp(window.resetsAt)}`}
+          style={{ fontSize: 11, color: palette.muted }}
+        >
+          {view.reset}
+        </Text>
+      </View>
+    </View>
+  );
+}
+function AccountRow({
+  account,
+  provider,
+  compact,
+  warning,
+  danger,
+  offline,
+  busy,
+  onSwitch,
+}: {
+  account: Account;
+  provider: Provider;
+  compact: boolean;
+  warning: number;
+  danger: number;
+  offline: boolean;
+  busy: boolean;
+  onSwitch: () => void;
+}) {
+  const [open, setOpen] = useState(false),
+    [focused, setFocused] = useState(false),
+    [hovered, setHovered] = useState(false);
+  const windows = splitWindows(provider, account.windows),
+    read = lastRead(account);
+  const dot =
+    account.active || account.health !== "ok"
+      ? toneColor(accountTone(account, warning, danger))
+      : palette.faint;
+  const details = [
+    ["Account", account.email ?? "Email unknown"],
+    ["Plan", account.plan ?? "Plan unknown"],
+    [
+      "Login",
+      account.loginExpiresAt !== null
+        ? new Date(account.loginExpiresAt * 1000).toLocaleDateString("en-GB", {
+            day: "numeric",
+            month: "short",
+            year: "numeric",
+          })
+        : provider === "codex"
+          ? "No fixed end date"
+          : provider === "agy"
+            ? "Renewed by agy"
+            : "Unknown",
+    ],
+    ["Last read", relativeAge(read)],
+  ];
+  const toggle = () => setOpen((value) => !value);
+  return (
+    <Pressable
+      accessible={false}
+      focusable={false}
+      onPress={toggle}
+      style={{
+        padding: 10,
+        paddingHorizontal: 12,
+        marginBottom: 6,
+        borderWidth: 1,
+        borderColor: focused
+          ? palette.focus
+          : account.active
+            ? "#33473d"
+            : "transparent",
+        borderRadius: 8,
+        backgroundColor: hovered ? palette.hover : palette.row,
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 2,
+        }}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${open ? "Collapse" : "Expand"} ${account.alias} account details. ${account.active ? "In use." : ""} Health ${account.health}.`}
+          accessibilityState={{ expanded: open }}
+          onPress={(event) => {
+            event.stopPropagation();
+            toggle();
+          }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onHoverIn={() => setHovered(true)}
+          onHoverOut={() => setHovered(false)}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: compact ? 44 : 24,
+            flexDirection: "row",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
+          <View
+            style={{
+              width: 13,
+              height: 13,
+              borderRadius: 7,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: account.active
+                ? "rgba(82,183,136,0.15)"
+                : "transparent",
+              borderWidth: account.active ? 1 : 0,
+              borderColor: palette.ok,
+            }}
+          >
+            <View
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: 4,
+                backgroundColor: dot,
+              }}
+            />
+          </View>
+          <Text
+            numberOfLines={1}
+            style={{
+              color: palette.text,
+              fontWeight: "600",
+              fontSize: 13,
+              flexShrink: 1,
+            }}
+          >
+            {account.alias}
+          </Text>
+          {account.active && (
+            <Text
+              numberOfLines={1}
+              style={{ color: palette.muted, fontSize: 12 }}
+            >
+              In use
+            </Text>
+          )}
+        </Pressable>
+        {!account.active && (
+          <Button
+            label="Switch"
+            a11yLabel={`Switch to ${account.alias}`}
+            compact={compact}
+            small
+            disabled={
+              busy ||
+              !account.enabled ||
+              ["quarantined", "deviceBlocked", "needsLogin"].includes(
+                account.health,
+              )
+            }
+            onPress={onSwitch}
+          />
+        )}
+      </View>
+      {(!account.enabled ||
+        account.health !== "ok" ||
+        account.usageStatus !== "ok") && (
+        <Text style={{ color: palette.warning, fontSize: 11 }}>
+          {!account.enabled ? "Disabled · " : ""}
+          {account.health !== "ok" ? account.health + " · " : ""}usage:{" "}
+          {account.usageStatus}
+        </Text>
+      )}
+      {account.warnings?.map((warning, index) => (
+        <Text key={index} style={{ color: palette.warning, fontSize: 11 }}>
+          {warning}
+        </Text>
+      ))}
+      <View>
+        {windows.main.map((window) => (
+          <PaceBar
+            key={window.id}
+            {...{ provider, window, warning, danger, offline }}
+          />
+        ))}
+        {account.windows.length === 0 && (
+          <Text style={{ color: palette.muted, fontSize: 12, marginTop: 6 }}>
+            Usage unknown. No quota is assumed.
+          </Text>
+        )}
+      </View>
+      {open && (
+        <View
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTopWidth: 1,
+            borderTopColor: palette.line,
+            gap: 5,
+          }}
+        >
+          {details.map(([label, value]) => (
+            <View key={label} style={{ flexDirection: "row", gap: 10 }}>
+              <Text style={{ width: 86, color: palette.muted, fontSize: 12 }}>
+                {label}
+              </Text>
+              <Text
+                selectable
+                accessibilityLabel={
+                  label === "Login"
+                    ? `${value}. ${timestamp(account.loginExpiresAt)}`
+                    : label === "Last read"
+                      ? `${value}. ${timestamp(read)}`
+                      : value
+                }
+                style={{ color: palette.text, fontSize: 12, flex: 1 }}
+              >
+                {value}
+              </Text>
+            </View>
+          ))}
+          <View style={{ marginTop: windows.extra.length ? 3 : 0 }}>
+            {windows.extra.map((window) => (
+              <PaceBar
+                key={window.id}
+                {...{ provider, window, warning, danger, offline }}
+              />
+            ))}
+          </View>
+        </View>
+      )}
     </Pressable>
   );
 }
 export function AccountPopover(
   props: PluginPopoverProps & { openSettings: () => void },
 ) {
+  const { height } = useWindowDimensions();
   const query = useStatus(props.host.id),
     switchAccount = useRpc(switchRpc),
     strategy = useRpc(strategyRpc),
@@ -265,12 +672,13 @@ export function AccountPopover(
   const [busy, setBusy] = useState(false),
     [notice, setNotice] = useState<{ text: string; uncertain: boolean } | null>(
       null,
-    );
+    ),
+    [selected, setSelected] = useState<Provider>("claude");
   const display = useSettings(displaySettings);
   const warning = display.status === "ready" ? display.values.warning : 75,
     danger = display.status === "ready" ? display.values.danger : 90;
   const data = query.data?.ok ? query.data.data : null,
-    c = props.theme.colors;
+    provider = data?.providers.find((value) => value.provider === selected);
   async function act(action: () => Promise<ActionResult | ActionResult[]>) {
     if (busy) return;
     setBusy(true);
@@ -280,10 +688,11 @@ export function AccountPopover(
         results = Array.isArray(value) ? value : [value];
       setNotice({
         text: results.length
-          ? results.map((r) => r.message).join("\n")
+          ? results.map((result) => result.message).join("\n")
           : "No active accounts in snapshots. Bootstrap provider lists first.",
         uncertain: results.some(
-          (r) => r.outcome === "uncertain" || r.outcome === "error",
+          (result) =>
+            result.outcome === "uncertain" || result.outcome === "error",
         ),
       });
     } catch {
@@ -297,219 +706,256 @@ export function AccountPopover(
     }
   }
   return (
-    <ScrollView
+    <View
+      accessibilityLabel={`SubBaton subscriptions on ${props.host.label}`}
       style={{
-        maxHeight: props.layout.compact ? 560 : 640,
         width: "100%",
-        maxWidth: 480,
+        maxWidth: props.layout.compact ? undefined : 384,
+        backgroundColor: palette.pop,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: palette.line,
+        overflow: "hidden",
       }}
-      contentContainerStyle={{ padding: 12, gap: 12 }}
     >
-      <Text style={{ fontSize: 17, fontWeight: "600", color: c.foreground }}>
-        SubBaton · {props.host.label}
-      </Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        <Button
-          label={busy ? "Working…" : "Refresh now"}
-          theme={props.theme}
-          disabled={busy}
-          onPress={() =>
-            void act(async () =>
-              (await refresh({})).map((v) => ({
-                ...v.result,
-                message: `${v.provider ? providerLabel[v.provider] : "SubBaton"}: ${v.result.message}`,
-              })),
-            )
-          }
-        />
-        <Button
-          label="Settings"
-          theme={props.theme}
-          onPress={props.openSettings}
-        />
-      </View>
-      <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
-        Cached readings. Existing agents are not reopened after a switch. Finish
-        running agy sessions first.
-      </Text>
-      {notice && (
-        <Text
-          accessibilityLiveRegion="polite"
-          style={{ color: notice.uncertain ? c.statusWarning : c.foreground }}
+      <View
+        style={{
+          paddingTop: 12,
+          paddingBottom: 8,
+          paddingHorizontal: 14,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+        }}
+      >
+        <View
+          accessibilityRole="tablist"
+          style={{
+            flexDirection: "row",
+            gap: 2,
+            backgroundColor: "#18181b",
+            padding: 3,
+            borderRadius: 8,
+          }}
         >
-          {notice.text}
-        </Text>
-      )}
-      {(query.isError || query.data?.ok === false) && (
-        <Text style={{ color: c.statusWarning }}>
-          {query.data?.error?.message ?? "Status unavailable on this host."}
-        </Text>
-      )}
-      {!data && query.isPending && (
-        <Text style={{ color: c.foregroundMuted }}>Loading cached status…</Text>
-      )}
-      {data?.providers.map((provider) => (
-        <View key={provider.provider} style={{ gap: 8 }}>
-          <Text style={{ color: c.foreground, fontWeight: "600" }}>
-            {providerLabel[provider.provider]}
-          </Text>
-          <Text style={{ fontSize: 11, color: c.foregroundMuted }}>
-            Snapshot {provider.cacheStatus} ·{" "}
-            {timestamp(provider.updatedAt ?? null)}
-          </Text>
-          {provider.cacheStatus !== "available" && (
-            <Text style={{ color: c.statusWarning }}>
-              {provider.provider === "unknown"
-                ? "A newer CLI provider is not supported by this plugin yet."
-                : "Run this provider's list command once with the signed CLI to populate its snapshot."}
-            </Text>
-          )}
-          {provider.cacheStatus === "available" &&
-            provider.accounts.length === 0 && (
-              <Text style={{ color: c.foregroundMuted }}>
-                No saved accounts.
-              </Text>
-            )}
-          {provider.accounts.map((account) => (
-            <View
-              key={account.id}
-              style={{
-                padding: 10,
-                gap: 6,
-                borderWidth: 1,
-                borderRadius: 7,
-                borderColor: c.border,
-                backgroundColor: c.surface1,
-              }}
-            >
-              <Text
-                selectable
-                style={{ color: c.foreground, fontWeight: "600" }}
-              >
-                {account.active ? "● " : ""}
-                {account.alias}
-                {account.active ? " · active" : ""}
-                {!account.enabled ? " · disabled" : ""}
-              </Text>
-              <Text
-                selectable
-                style={{ color: c.foregroundMuted, fontSize: 12 }}
-              >
-                {account.email ?? "Email unknown"} ·{" "}
-                {account.plan ?? "Plan unknown"}
-              </Text>
-              <Text
-                style={{
-                  color:
-                    account.health === "ok"
-                      ? c.foregroundMuted
-                      : c.statusWarning,
-                  fontSize: 12,
-                }}
-              >
-                {account.health} · usage: {account.usageStatus}
-              </Text>
-              <Text style={{ color: c.foregroundMuted, fontSize: 11 }}>
-                Login expires: {timestamp(account.loginExpiresAt)}
-              </Text>
-              {account.windows.length === 0 && (
-                <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
-                  Usage unknown. No quota is assumed.
-                </Text>
+          {(["claude", "codex", "agy"] as const).map((id) => (
+            <ProviderTab
+              key={id}
+              id={id}
+              compact={props.layout.compact}
+              selected={selected === id}
+              tone={accountTone(
+                data?.providers
+                  .find((value) => value.provider === id)
+                  ?.accounts.find((account) => account.active),
+                warning,
+                danger,
               )}
-              {account.windows.map((window) => (
-                <View key={window.id} style={{ gap: 2 }}>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      justifyContent: "space-between",
-                      gap: 8,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: c.foreground,
-                        fontSize: 12,
-                        flexShrink: 1,
-                      }}
-                    >
-                      {window.label}
-                      {stale(window, query.isError) ? " · stale" : ""}
-                    </Text>
-                    <Meter
-                      theme={props.theme}
-                      window={window}
-                      warning={warning}
-                      danger={danger}
-                      offline={query.isError}
-                    />
-                  </View>
-                  <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>
-                    Resets: {timestamp(window.resetsAt)} · fetched{" "}
-                    {timestamp(window.fetchedAt)}
-                  </Text>
-                </View>
-              ))}
-              {provider.provider !== "unknown" && !account.active && (
-                <Button
-                  label={`Switch to ${account.alias}`}
-                  theme={props.theme}
-                  disabled={
-                    busy ||
-                    !account.enabled ||
-                    ["quarantined", "deviceBlocked", "needsLogin"].includes(
-                      account.health,
-                    )
-                  }
-                  onPress={() => {
-                    const selectedProvider = provider.provider;
-                    if (selectedProvider !== "unknown")
-                      void act(() =>
-                        switchAccount({
-                          provider: selectedProvider,
-                          target: account.id,
-                        }),
-                      );
-                  }}
-                />
-              )}
-            </View>
+              onPress={() => setSelected(id)}
+            />
           ))}
-          {provider.provider === "claude" ? (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              <Button
-                label="Next available"
-                theme={props.theme}
-                disabled={busy}
-                onPress={() =>
-                  void act(() =>
-                    strategy({
-                      provider: "claude",
-                      strategy: "next-available",
-                    }),
-                  )
-                }
-              />
-              <Button
-                label="Best quota"
-                theme={props.theme}
-                disabled={busy}
-                onPress={() =>
-                  void act(() =>
-                    strategy({ provider: "claude", strategy: "best" }),
-                  )
-                }
-              />
-            </View>
-          ) : (
-            <Text style={{ color: c.foregroundMuted, fontSize: 11 }}>
-              {provider.provider === "unknown"
-                ? "Actions for unknown providers are disabled."
-                : "Quota strategies are currently available for Claude. Named switching is available here."}
+        </View>
+        <View
+          style={{
+            flexDirection: "row",
+            gap: 3,
+            alignItems: "center",
+            flex: 1,
+            minWidth: 0,
+            justifyContent: "flex-end",
+          }}
+        >
+          <Text
+            accessibilityLabel={`Updated ${relativeAge(provider?.updatedAt ?? null)}`}
+            numberOfLines={2}
+            style={{ color: palette.muted, fontSize: 11, flexShrink: 1 }}
+          >
+            updated {relativeAge(provider?.updatedAt ?? null)}
+          </Text>
+          <Button
+            label={busy ? "Working…" : "Refresh now"}
+            icon="RefreshCw"
+            compact={props.layout.compact}
+            disabled={busy}
+            onPress={() =>
+              void act(async () =>
+                (await refresh({})).map((value) => ({
+                  ...value.result,
+                  message: `${value.provider ? providerLabel[value.provider] : "SubBaton"}: ${value.result.message}`,
+                })),
+              )
+            }
+          />
+        </View>
+      </View>
+      <ScrollView
+        style={{ maxHeight: popoverBodyHeight(props.layout.compact, height) }}
+        contentContainerStyle={{
+          paddingTop: 2,
+          paddingHorizontal: 10,
+          paddingBottom: 10,
+        }}
+      >
+        {notice && (
+          <Text
+            accessibilityLiveRegion="polite"
+            style={{
+              color: notice.uncertain ? palette.warning : palette.text,
+              fontSize: 12,
+              padding: 4,
+            }}
+          >
+            {notice.text}
+          </Text>
+        )}
+        {(query.isError || query.data?.ok === false) && (
+          <Text style={{ color: palette.warning, fontSize: 12, padding: 4 }}>
+            {query.data?.error?.message ?? "Status unavailable on this host."}
+          </Text>
+        )}
+        {data?.providers.some((value) => value.provider === "unknown") && (
+          <Text style={{ color: palette.muted, fontSize: 11 }}>
+            A newer provider is unknown; its actions are disabled.
+          </Text>
+        )}
+        {!data && query.isPending && (
+          <Text style={{ color: palette.muted }}>Loading cached status…</Text>
+        )}
+        {selected === "claude" && (
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 8,
+              paddingHorizontal: 4,
+              paddingTop: 4,
+              paddingBottom: 10,
+            }}
+          >
+            <Button
+              label="Switch to best"
+              compact={props.layout.compact}
+              disabled={busy}
+              onPress={() =>
+                void act(() =>
+                  strategy({ provider: "claude", strategy: "best" }),
+                )
+              }
+            />
+            <Button
+              label="Next available"
+              compact={props.layout.compact}
+              disabled={busy}
+              onPress={() =>
+                void act(() =>
+                  strategy({ provider: "claude", strategy: "next-available" }),
+                )
+              }
+            />
+          </View>
+        )}
+        {provider?.cacheStatus !== "available" && (
+          <Text style={{ color: palette.warning, fontSize: 12, padding: 4 }}>
+            Snapshot {provider?.cacheStatus ?? "missing"}. Run this provider's
+            list command once with the signed CLI to populate its snapshot.
+          </Text>
+        )}
+        {provider?.cacheStatus === "available" &&
+          provider.accounts.length === 0 && (
+            <Text style={{ color: palette.muted, padding: 4 }}>
+              No saved accounts.
             </Text>
           )}
+        {provider?.accounts.map((account) => (
+          <AccountRow
+            key={account.id}
+            account={account}
+            provider={selected}
+            compact={props.layout.compact}
+            warning={warning}
+            danger={danger}
+            offline={query.isError || query.data?.ok === false}
+            busy={busy}
+            onSwitch={() =>
+              void act(() =>
+                switchAccount({ provider: selected, target: account.id }),
+              )
+            }
+          />
+        ))}
+        {selected === "codex" && (
+          <Text style={{ color: palette.muted, fontSize: 12, padding: 6 }}>
+            Open Codex terminals keep their account until restarted.
+          </Text>
+        )}
+        {selected === "agy" && (
+          <Text style={{ color: palette.muted, fontSize: 12, padding: 6 }}>
+            Stop agy before switching. Conversations resume with agy -c.
+          </Text>
+        )}
+        <View style={{ alignSelf: "flex-start", marginTop: 4 }}>
+          <Button
+            label="Settings"
+            onPress={props.openSettings}
+            compact={props.layout.compact}
+          />
         </View>
-      ))}
-    </ScrollView>
+      </ScrollView>
+    </View>
+  );
+}
+function ProviderTab({
+  id,
+  compact,
+  selected,
+  tone,
+  onPress,
+}: {
+  id: Provider;
+  compact: boolean;
+  selected: boolean;
+  tone: string;
+  onPress: () => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityLabel={`${providerLabel[id]}, status ${tone}`}
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        minHeight: compact ? 44 : 28,
+        borderRadius: 6,
+        backgroundColor: selected ? palette.hover : "transparent",
+        borderWidth: 1,
+        borderColor: focused ? palette.focus : "transparent",
+      }}
+    >
+      <View
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 3,
+          backgroundColor: toneColor(tone),
+        }}
+      />
+      <Text
+        style={{
+          fontSize: 12,
+          fontWeight: "500",
+          color: selected ? palette.text : palette.muted,
+        }}
+      >
+        {providerLabel[id]}
+      </Text>
+    </Pressable>
   );
 }

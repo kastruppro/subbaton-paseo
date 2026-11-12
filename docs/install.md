@@ -58,3 +58,25 @@ Tap the footer for all cached accounts, reset/login-expiry dates and manual acti
 Named switch RPCs accept only known account UUIDs from the last status. Strategies have separate explicit actions. Unknown additive health/providers show unknown without hiding supported accounts. Failed status/configuration checks back off for 15 seconds; saving settings clears that backoff. Global refresh errors are not assigned to a provider. Inferred reset quota has an ≈ marker even when labels shrink.
 
 Avoid reload/stop during an action. Teardown does not deliberately cancel a transaction child; transport loss still requires state/recovery inspection. After source updates, rerun typecheck/tests/build and use `paseo plugin reload subbaton`; check ls/logs. Do not restart the daemon. Disable/remove with `paseo plugin disable subbaton` / `paseo plugin remove subbaton`; local source is retained. See live-tests-plugin.md before daily use. A later coordinated handoff must use **agent.reload()**; agent.refresh() only reads state.
+
+## Update the shared testuser installation
+
+The owner-approved popover redesign uses the same plugin ID, runtime requirements and binary trust checks. Do not install/reload while an action is running.
+
+After tests/typecheck/build are green, run this from a **root shell**. This updates the existing root-controlled shared checkout; it does not run the CLI or provider processes:
+
+```sh
+rsync -a --delete --exclude='.git' --exclude='node_modules' --exclude='build' /path/to/subbaton-paseo/ /Users/Shared/subbaton/paseo-plugin/
+chown -R root:wheel /Users/Shared/subbaton/paseo-plugin
+chmod -R go-w /Users/Shared/subbaton/paseo-plugin
+```
+
+Then, in **testuser's shell**, reload the already installed shared-path plugin:
+
+```sh
+paseo plugin reload subbaton
+paseo plugin ls
+paseo plugin logs subbaton
+```
+
+No daemon restart is needed. Keep the CLI path and saved pins/settings as they are. The host compiles the shared source; build/ and node_modules are not deployed. Validate desktop/mobile appearance, Enter/Space row expansion, visible keyboard focus, actions/uncertainty messages, and disabled built-in usage sources using live-tests-plugin.md.

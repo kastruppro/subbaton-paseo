@@ -8,7 +8,7 @@ import {
 } from "../client/display.js";
 test("missing and stale quota is never shown as a fresh zero", () => {
   assert.equal(percentText(null, false), "—");
-  assert.equal(percentText(25, true), "~25%");
+  assert.equal(percentText(25, true), "25%");
   assert.equal(severity(null, true, 75, 90), "unknown");
   assert.equal(severity(95, false, 75, 90), "danger");
 });

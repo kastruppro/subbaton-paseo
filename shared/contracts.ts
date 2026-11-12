@@ -13,6 +13,7 @@ export const windowSchema = z.object({
   stale: z.boolean(),
   inferred: z.boolean().optional().default(false),
   fetchedAt: time,
+  windowSeconds: z.number().finite().nullable().optional(),
 });
 export const accountSchema = z.object({
   id: text,
@@ -37,6 +38,8 @@ export const accountSchema = z.object({
   plan: text.nullable(),
   loginExpiresAt: time,
   usageStatus: text,
+  summaryStatus: text.nullable().optional(),
+  warnings: z.array(text).max(8).optional(),
   windows: z.array(windowSchema).max(256),
 });
 const providerStatusSchema = z.preprocess(
@@ -130,11 +133,7 @@ export const hostSettings = defineSettings({
   version: 1,
   schema: z.object({
     allowPathLookup: z.boolean().default(false),
-    binaryPath: z
-      .string()
-      .min(1)
-      .max(4096)
-      .default(defaultBinary),
+    binaryPath: z.string().min(1).max(4096).default(defaultBinary),
   }),
 });
 export const displaySchema = z

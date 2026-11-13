@@ -1,6 +1,9 @@
 {
   "id": "subbaton",
   "name": "SubBaton",
+  "icon": "assets/icon.png",
   "description": "Subscription account usage and manual switching through the local SubBaton CLI.",
-  "requirements": { "paseo": ">=0.15.3" }
+  "requirements": {
+    "paseo": ">=0.15.3"
+  }
 }

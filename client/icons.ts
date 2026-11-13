@@ -1,0 +1,3 @@
+// The SubBaton Relay loop mark (small cut from logo/kit/svg/subbaton-symbol-small-black.svg),
+// painted with currentColor so Paseo tints it with the surface's icon colour.
+export const subbatonMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="currentColor" d="M75.52 54.07 L142.73 121.28 A20.2255 20.2255 0 0 0 171.33 92.68 L104.12 25.46 A20.2255 20.2255 0 0 0 75.52 54.07 Z"/><path fill="currentColor" d="M216.54 116.51 L124.72 141.12 A20.2255 20.2255 0 0 0 135.19 180.19 L227.01 155.59 A20.2255 20.2255 0 0 0 216.54 116.51 Z"/><path fill="currentColor" d="M91.94 207.42 L116.55 115.61 A20.2255 20.2255 0 0 0 77.47 105.14 L52.87 196.95 A20.2255 20.2255 0 0 0 91.94 207.42 Z"/></svg>`;

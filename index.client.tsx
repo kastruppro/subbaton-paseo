@@ -6,6 +6,7 @@ import type {
 import { AccountPopover, Footer } from "./client/views.js";
 import { SettingsScreen } from "./client/settings.js";
 import { ControlScreen } from "./client/control.js";
+import { subbatonMark } from "./client/icons.js";
 export default function contribute(client: PluginClientContext) {
   function Details(props: PluginPopoverProps) {
     return (
@@ -32,7 +33,7 @@ export default function contribute(client: PluginClientContext) {
   const removeControl = client.addSettingsScreen({
     id: "control",
     title: "SubBaton settings",
-    icon: "SlidersHorizontal",
+    icon: { svg: subbatonMark },
     Component: ControlScreen,
   });
   return () => {

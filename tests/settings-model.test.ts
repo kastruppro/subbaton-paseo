@@ -216,6 +216,6 @@ test("rename input preserves the text sent across refused writes and background 
   const source = await readFile(new URL("../client/control.tsx", import.meta.url), "utf8");
   assert.ok(source.includes('key={`${account.id}:${renaming}`} label="New account name" initialValue={newAlias}'));
   assert.ok(source.includes('alias: newAlias, expectedRevision: section.revision'));
-  assert.ok(source.includes('if (response.result.outcome === "success") await reload();'));
+  assert.ok(source.includes('if (response.result.outcome === "success" || ["revisionConflict", "reloadSettings"].includes(response.result.code)) await reload();'));
   assert.ok(source.includes('setNewAlias(account.alias); setRenameError(null); setRenaming(!renaming);'));
 });

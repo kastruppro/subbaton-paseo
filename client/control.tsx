@@ -859,7 +859,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
                 setBusy(true);
                 try {
                   const response = await runAction(input);
-                  if (response.result.outcome === "success") await reload();
+                  if (response.result.outcome === "success" || ["revisionConflict", "reloadSettings"].includes(response.result.code)) await reload();
                   return response.result;
                 } catch {
                   return { outcome: "error", code: "transport", message: "The request did not reach the host. Reload before retrying." };

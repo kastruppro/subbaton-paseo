@@ -164,6 +164,13 @@ export const settingsSetRpc = defineRpc({
 });
 export const settingsActionInput = z.discriminatedUnion("action", [
   z.object({
+    action: z.literal("renameAccount"),
+    provider: providerSchema,
+    account: argvIdentifier,
+    alias: z.string().min(1).max(512).refine((v) => v.trim().length > 0 && !v.trimStart().startsWith("-")),
+    expectedRevision: revisionSchema,
+  }),
+  z.object({
     action: z.literal("releaseQuarantine"),
     provider: providerSchema,
     account: argvIdentifier,

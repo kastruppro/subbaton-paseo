@@ -359,6 +359,7 @@ function AccountCard({
   update,
   revisionKey,
   action,
+  rename,
   changed,
 }: {
   section: Section;
@@ -370,8 +371,12 @@ function AccountCard({
   update: (path: string[], value: Leaf) => void;
   revisionKey: string;
   action: (input: SettingsActionInput, title: string, body: string) => void;
+  rename: (input: SettingsActionInput) => Promise<ActionResult>;
 }) {
   const [open, setOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [newAlias, setNewAlias] = useState(account.alias);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const fields = accountFields(section, account, draft, changed);
   const primary = fields.filter((f) => f.field.type === "boolean" || f.field.type === "integer");
   const overrides = fields.filter((f) => !primary.includes(f));
@@ -388,6 +393,13 @@ function AccountCard({
           <Badge key={b} text={b} colors={colors} tone="warning" />
         ))}
       </View>
+      <SettingsRow label="Account name">
+        <Button label="Rename…" a11y={`Rename ${account.alias}`} colors={colors} disabled={disabled} onPress={() => { setNewAlias(account.alias); setRenaming(!renaming); }} />
+      </SettingsRow>
+      {renaming && <SettingsRow label="New account name">
+        <SettingsInput key={`${revisionKey}:${renaming}`} label="New account name" initialValue={account.alias} onChangeText={setNewAlias} error={renameError} disabled={disabled} />
+        <Button label="Save name" a11y={`Save name for ${account.alias}`} colors={colors} disabled={disabled || !newAlias.trim() || newAlias.trimStart().startsWith("-")} onPress={() => { void rename({ action: "renameAccount", provider: section.provider, account: account.id, alias: newAlias, expectedRevision: section.revision }).then((result) => { if (result.outcome === "success") { setRenaming(false); setRenameError(null); } else { setRenameError(result.message); } }); }} />
+      </SettingsRow>}
       {primary.map((view) => (
         <FieldControl key={view.key} view={view} disabled={disabled} colors={colors} update={update} revisionKey={revisionKey} />
       ))}
@@ -843,6 +855,16 @@ export function ControlScreen(props: PluginSurfaceProps) {
               update={update}
               revisionKey={revisionKey}
               action={action}
+              rename={async (input) => {
+                setBusy(true);
+                try {
+                  const response = await runAction(input);
+                  await reload();
+                  return response.result;
+                } catch {
+                  return { outcome: "error", code: "transport", message: "The request did not reach the host. Reload before retrying." };
+                } finally { setBusy(false); }
+              }}
               changed={marks ?? new Set()}
             />
           ))}

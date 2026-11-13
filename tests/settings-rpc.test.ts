@@ -427,3 +427,15 @@ test("events send whole-second since values", async () => {
   assert.deepEqual(cli.calls.at(-1)?.argv, ["events", "--since", "1731500000", "--json"]);
 });
 
+
+test("rename uses revision-bound argv and rejects flags and unknown accounts", async () => {
+  const { cli, service } = await loaded();
+  cli.on(["claude", "alias"], ok({ outcome: "updated" }));
+  const response = await service.settingsAction({ action: "renameAccount", provider: "claude", account: accountA, alias: "Work two", expectedRevision: revision });
+  assert.equal(response.result.outcome, "success");
+  assert.deepEqual(cli.calls.at(-1)?.argv, ["claude", "alias", accountA, "Work two", "--expected-revision", revision, "--json"]);
+  for (const alias of ["--json", "", " "]) {
+    assert.equal((await service.settingsAction({ action: "renameAccount", provider: "claude", account: accountA, alias, expectedRevision: revision })).result.outcome, "error");
+  }
+  assert.equal((await service.settingsAction({ action: "renameAccount", provider: "claude", account: "unknown", alias: "Work", expectedRevision: revision })).result.outcome, "error");
+});

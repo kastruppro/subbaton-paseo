@@ -544,6 +544,13 @@ export class SubBatonService {
     const section = this.knownSettings.get(action.provider);
     if (!section) return { result: settingsError("reloadSettings"), section: null };
     if (action.expectedRevision !== section.revision) return { result: settingsError("revisionConflict"), section: null };
+    if (action.action === "renameAccount") {
+      if (!section.accounts.some((a) => a.id === action.account)) return { result: settingsError("unknownAccount"), section: null };
+      if (section.readOnly) return { result: settingsError("readOnly"), section: null };
+      return this.settingsMutation(action.provider,
+        [action.provider, "alias", action.account, action.alias, "--expected-revision", action.expectedRevision],
+        { updated: { outcome: "success", code: "updated", message: "Account renamed." } });
+    }
     if (!section.actions.includes(action.action))
       return { result: failure("unsupportedAction", "The CLI does not offer this action for this provider."), section: null };
     if (action.action === "resumeAuto") {

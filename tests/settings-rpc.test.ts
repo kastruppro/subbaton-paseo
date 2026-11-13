@@ -463,3 +463,13 @@ test("rename preserves duplicate refusal and refuses read-only provider", async 
   assert.equal(response.result.code, "readOnly");
   assert.equal(ctx.cli.calls.length, count);
 });
+
+test("rename exposes actionable new alias refusal codes", async () => {
+  const { cli, service } = await loaded();
+  for (const code of ["aliasExists", "invalidAlias"]) {
+    cli.on(["claude", "alias"], refused(code));
+    const result = await service.settingsAction({ action: "renameAccount", provider: "claude", account: accountA, alias: "Other", expectedRevision: revision });
+    assert.equal(result.result.code, code);
+    assert.match(result.result.message, code === "aliasExists" ? /already used/ : /name/);
+  }
+});

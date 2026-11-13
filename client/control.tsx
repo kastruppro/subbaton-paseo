@@ -12,6 +12,7 @@ import {
   SettingsSelect,
   SettingsSwitch,
 } from "@getpaseo/plugin/client/ui";
+import { settingsMessages } from "../shared/settings-messages.js";
 import { hostSettings, type ActionResult, type Provider } from "../shared/contracts.js";
 import {
   autoPlanRpc,
@@ -397,7 +398,7 @@ function AccountCard({
         <Button label="Rename…" a11y={`Rename ${account.alias}`} colors={colors} disabled={disabled} onPress={() => { setNewAlias(account.alias); setRenameError(null); setRenaming(!renaming); }} />
       </SettingsRow>
       {renaming && <SettingsRow label="New account name">
-        <SettingsInput key={`${account.id}:${renaming}`} label="New account name" initialValue={newAlias} onChangeText={setNewAlias} error={renameError} disabled={disabled} />
+        <SettingsInput key={`${account.id}:${renaming}`} label="New account name" initialValue={newAlias} onChangeText={setNewAlias} error={newAlias.trimStart().startsWith("-") || !newAlias.trim() ? settingsMessages.invalidAlias : renameError} disabled={disabled} />
         <Button label="Save name" a11y={`Save name for ${account.alias}`} colors={colors} disabled={disabled || !newAlias.trim() || newAlias.trimStart().startsWith("-")} onPress={() => { void rename({ action: "renameAccount", provider: section.provider, account: account.id, alias: newAlias, expectedRevision: section.revision }).then((result) => { if (result.outcome === "success") { setRenaming(false); setRenameError(null); } else { setRenameError(result.message); } }); }} />
       </SettingsRow>}
       {primary.map((view) => (

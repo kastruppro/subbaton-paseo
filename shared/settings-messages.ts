@@ -1,5 +1,7 @@
 // Static plugin wording for typed CLI settings/poller refusals. Raw CLI messages are never shown.
 export const settingsMessages: Record<string, string> = {
+  aliasExists: "That account name is already used by this provider. Choose another name.",
+  invalidAlias: "Enter a nonempty account name that does not start with a dash. Use letters, digits, spaces or -_ .@+ (up to 254 bytes); UUID names are not allowed.",
   duplicate: "That account name is already used by this provider. Choose another name.",
   busy: "Provider settings are busy. Retry shortly.",
   revisionConflict:

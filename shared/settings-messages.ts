@@ -1,5 +1,6 @@
 // Static plugin wording for typed CLI settings/poller refusals. Raw CLI messages are never shown.
 export const settingsMessages: Record<string, string> = {
+  duplicate: "That account name is already used by this provider. Choose another name.",
   busy: "Provider settings are busy. Retry shortly.",
   revisionConflict:
     "Settings changed elsewhere (another device, the CLI or an account change). The latest values were reloaded; review them and apply again.",

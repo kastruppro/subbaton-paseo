@@ -210,3 +210,12 @@ test("fields carry the CLI's runtimeDetail", () => {
   const s = normalizeSection("claude", raw);
   assert.equal(s.fields.find((f) => f.path === "notifications.enabled")?.runtimeDetail, "Recorded in the event log.");
 });
+
+test("rename input preserves the text sent across refused writes and background revisions", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../client/control.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes('key={`${account.id}:${renaming}`} label="New account name" initialValue={newAlias}'));
+  assert.ok(source.includes('alias: newAlias, expectedRevision: section.revision'));
+  assert.ok(source.includes('if (response.result.outcome === "success") await reload();'));
+  assert.ok(source.includes('setNewAlias(account.alias); setRenameError(null); setRenaming(!renaming);'));
+});

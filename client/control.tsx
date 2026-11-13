@@ -394,10 +394,10 @@ function AccountCard({
         ))}
       </View>
       <SettingsRow label="Account name">
-        <Button label="Rename…" a11y={`Rename ${account.alias}`} colors={colors} disabled={disabled} onPress={() => { setNewAlias(account.alias); setRenaming(!renaming); }} />
+        <Button label="Rename…" a11y={`Rename ${account.alias}`} colors={colors} disabled={disabled} onPress={() => { setNewAlias(account.alias); setRenameError(null); setRenaming(!renaming); }} />
       </SettingsRow>
       {renaming && <SettingsRow label="New account name">
-        <SettingsInput key={`${revisionKey}:${renaming}`} label="New account name" initialValue={account.alias} onChangeText={setNewAlias} error={renameError} disabled={disabled} />
+        <SettingsInput key={`${account.id}:${renaming}`} label="New account name" initialValue={newAlias} onChangeText={setNewAlias} error={renameError} disabled={disabled} />
         <Button label="Save name" a11y={`Save name for ${account.alias}`} colors={colors} disabled={disabled || !newAlias.trim() || newAlias.trimStart().startsWith("-")} onPress={() => { void rename({ action: "renameAccount", provider: section.provider, account: account.id, alias: newAlias, expectedRevision: section.revision }).then((result) => { if (result.outcome === "success") { setRenaming(false); setRenameError(null); } else { setRenameError(result.message); } }); }} />
       </SettingsRow>}
       {primary.map((view) => (
@@ -859,7 +859,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
                 setBusy(true);
                 try {
                   const response = await runAction(input);
-                  await reload();
+                  if (response.result.outcome === "success") await reload();
                   return response.result;
                 } catch {
                   return { outcome: "error", code: "transport", message: "The request did not reach the host. Reload before retrying." };

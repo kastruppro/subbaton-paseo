@@ -439,3 +439,27 @@ test("rename uses revision-bound argv and rejects flags and unknown accounts", a
   }
   assert.equal((await service.settingsAction({ action: "renameAccount", provider: "claude", account: "unknown", alias: "Work", expectedRevision: revision })).result.outcome, "error");
 });
+
+test("rename stale revision never spawns and CLI conflict invalidates known settings", async () => {
+  const { cli, service } = await loaded();
+  const count = cli.calls.length;
+  assert.equal((await service.settingsAction({ action: "renameAccount", provider: "claude", account: accountA, alias: "Other", expectedRevision: "stale" })).result.code, "revisionConflict");
+  assert.equal(cli.calls.length, count);
+  cli.on(["claude", "alias"], refused("revisionConflict"));
+  assert.equal((await service.settingsAction({ action: "renameAccount", provider: "claude", account: accountA, alias: "Other", expectedRevision: revision })).result.code, "revisionConflict");
+  assert.equal((await service.settingsAction({ action: "renameAccount", provider: "claude", account: accountA, alias: "Other", expectedRevision: revision })).result.code, "reloadSettings");
+});
+test("rename preserves duplicate refusal and refuses read-only provider", async () => {
+  const { cli, service } = await loaded();
+  cli.on(["claude", "alias"], refused("duplicate"));
+  assert.equal((await service.settingsAction({ action: "renameAccount", provider: "claude", account: accountA, alias: "home", expectedRevision: revision })).result.code, "duplicate");
+  const ctx = scripted();
+  const section = claudeSection();
+  section.readOnly = true;
+  ctx.cli.on(["settings", "get"], ok({ providers: { claude: section } }));
+  await ctx.service.settings({});
+  const count = ctx.cli.calls.length;
+  const response = await ctx.service.settingsAction({ action: "renameAccount", provider: "claude", account: accountA, alias: "Other", expectedRevision: revision });
+  assert.equal(response.result.code, "readOnly");
+  assert.equal(ctx.cli.calls.length, count);
+});

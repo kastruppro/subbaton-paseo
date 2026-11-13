@@ -231,3 +231,8 @@ test("daemon restart event is accepted by the shared RPC schema", async () => {
   const parsed = eventSchema.parse({ id: "fixture", at: 1, provider: "codex", kind: "daemonRestarted" });
   assert.equal(parsed.kind, "daemonRestarted");
 });
+
+test("daemon restart setting belongs to Codex and carries the current macOS limitation", async () => {
+  const { groupFor } = await import("../client/settings-model.js");
+  assert.equal(groupFor("daemonAutoRestart"), "Codex");
+});

@@ -857,11 +857,11 @@ export class SubBatonService {
     if (this.mutating) return "busy";
     this.mutating = true;
     try {
-      const response = await this.call(["codex", "daemon", "restart"], 60000, true);
+      const response = await this.call(["codex", "daemon", "restart", "--if-pending"], 60000, true);
       if (response.error) return response.error.outcome === "uncertain" ? "unknown" : "failed";
       const outcome = (response.result as { daemonOutcome?: unknown; outcome?: unknown });
       const value = typeof outcome.daemonOutcome === "string" ? outcome.daemonOutcome : outcome.outcome;
-      return ["restarted", "failed", "pending"].includes(String(value)) ? String(value) : "unknown";
+      return ["restarted", "failed", "pending", "notPending"].includes(String(value)) ? String(value) : "unknown";
     } finally {
       this.mutating = false;
     }

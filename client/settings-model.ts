@@ -117,6 +117,7 @@ function view(
 }
 
 export const groupOrder = [
+  "Codex",
   "Automatic switching",
   "Thresholds",
   "Weekly reset priority",
@@ -126,6 +127,7 @@ export const groupOrder = [
 ] as const;
 export type GroupTitle = (typeof groupOrder)[number];
 export function groupFor(path: string): GroupTitle {
+  if (path === "daemonAutoRestart") return "Codex";
   if (["autoEnabled", "strategy", "cooldownMinutes", "improvementMargin"].includes(path)) return "Automatic switching";
   if (path.startsWith("thresholds.")) return "Thresholds";
   if (path.startsWith("weeklyResetPriority.")) return "Weekly reset priority";

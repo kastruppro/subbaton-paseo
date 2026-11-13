@@ -138,7 +138,9 @@ test("codex daemon pending and restart: fixed argv, fail closed", async () => {
   assert.equal(await service.codexDaemonPending(), null);
   cli.on(["codex", "daemon", "restart"], ok({ outcome: "restarted", daemonOutcome: "restarted" }));
   assert.equal(await service.codexDaemonRestart(), "restarted");
-  assert.deepEqual(cli.calls.at(-1)?.argv, ["codex", "daemon", "restart", "--json"]);
+  assert.deepEqual(cli.calls.at(-1)?.argv, ["codex", "daemon", "restart", "--if-pending", "--json"]);
+  cli.on(["codex", "daemon", "restart"], ok({ outcome: "notPending", daemonOutcome: "notPending" }));
+  assert.equal(await service.codexDaemonRestart(), "notPending");
   cli.on(["codex", "daemon", "restart"], ok({ outcome: "pending", daemonOutcome: "pending" }));
   assert.equal(await service.codexDaemonRestart(), "pending");
   cli.on(["codex", "daemon", "restart"], ok({ outcome: "weird" }));

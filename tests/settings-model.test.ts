@@ -219,3 +219,9 @@ test("rename input preserves the text sent across refused writes and background 
   assert.ok(source.includes('if (response.result.outcome === "success" || ["revisionConflict", "reloadSettings"].includes(response.result.code)) await reload();'));
   assert.ok(source.includes('setNewAlias(account.alias); setRenameError(null); setRenaming(!renaming);'));
 });
+
+test("rename input has one label", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../client/control.tsx", import.meta.url), "utf8");
+  assert.equal((source.match(/label="New account name"/g) ?? []).length, 1);
+});

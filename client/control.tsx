@@ -397,10 +397,10 @@ function AccountCard({
       <SettingsRow label="Account name">
         <Button label="Rename…" a11y={`Rename ${account.alias}`} colors={colors} disabled={disabled} onPress={() => { setNewAlias(account.alias); setRenameError(null); setRenaming(!renaming); }} />
       </SettingsRow>
-      {renaming && <SettingsRow label="New account name">
+      {renaming && <View style={{ gap: 8, padding: 12 }}>
         <SettingsInput key={`${account.id}:${renaming}`} label="New account name" initialValue={newAlias} onChangeText={setNewAlias} error={newAlias.trimStart().startsWith("-") || !newAlias.trim() ? settingsMessages.invalidAlias : renameError} disabled={disabled} />
         <Button label="Save name" a11y={`Save name for ${account.alias}`} colors={colors} disabled={disabled || !newAlias.trim() || newAlias.trimStart().startsWith("-")} onPress={() => { void rename({ action: "renameAccount", provider: section.provider, account: account.id, alias: newAlias, expectedRevision: section.revision }).then((result) => { if (result.outcome === "success") { setRenaming(false); setRenameError(null); } else { setRenameError(result.message); } }); }} />
-      </SettingsRow>}
+      </View>}
       {primary.map((view) => (
         <FieldControl key={view.key} view={view} disabled={disabled} colors={colors} update={update} revisionKey={revisionKey} />
       ))}

@@ -225,3 +225,9 @@ test("rename input has one label", async () => {
   const source = await readFile(new URL("../client/control.tsx", import.meta.url), "utf8");
   assert.equal((source.match(/label="New account name"/g) ?? []).length, 1);
 });
+
+test("daemon restart event is accepted by the shared RPC schema", async () => {
+  const { eventSchema } = await import("../shared/settings.js");
+  const parsed = eventSchema.parse({ id: "fixture", at: 1, provider: "codex", kind: "daemonRestarted" });
+  assert.equal(parsed.kind, "daemonRestarted");
+});

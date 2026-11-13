@@ -255,6 +255,7 @@ export const pollerLifecycleRpc = defineRpc({
 });
 
 export const eventKinds = [
+  "daemonRestarted",
   "automaticSwitch",
   "switchFailed",
   "needsLogin",

@@ -53,7 +53,7 @@ export const handoffStateSchema = z.object({
     codex: handoffSchema.nullable().default(null),
     agy: handoffSchema.nullable().default(null),
   }),
-  /** Newest switch event time already handled (Unix seconds). */
+  /** First-start event boundary (legacy files contain their last handled time); identity dedupe handles all later events. */
   eventWatermark: z.number().finite().nullable().default(null),
   handledSwitches: z.array(z.string().max(512)).max(200).default([]),
   /** One-time notice, for example after an unreadable state file was set aside. */

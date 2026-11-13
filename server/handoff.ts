@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import type { ActionResult } from "../shared/contracts.js";
 import {
   activePhases,
@@ -400,7 +401,11 @@ export class HandoffCoordinator {
       daemonOutcome: null,
     };
   }
+  private switchKey(key: string) {
+    return key.length <= 512 ? key : "sha256:" + createHash("sha256").update(key).digest("hex");
+  }
   private rememberSwitch(key: string) {
+    key = this.switchKey(key);
     this.state.handledSwitches = [...this.state.handledSwitches.filter((value) => value !== key), key].slice(-200);
   }
   private async pollEvents() {
@@ -410,13 +415,13 @@ export class HandoffCoordinator {
     this.lastEventPoll = this.now();
     const read = await this.cli.events(this.state.eventWatermark);
     if (read.ok) {
-      const watermark = this.state.eventWatermark ?? 0;
-      const fresh = read.events.filter((e) => e.at > watermark);
+      const startedAt = this.state.eventWatermark ?? 0;
+      const fresh = read.events.filter((e) => e.at > startedAt);
       if (fresh.length > 0) {
-        this.state.eventWatermark = Math.max(...fresh.map((e) => e.at));
+        // Keep the first-start boundary: the bounded event log can receive late writes.
         const switches = fresh.filter((e) => e.provider === "codex" && ["automaticSwitch","switched"].includes(e.kind));
-        const unseen = switches.filter((e) => !this.state.handledSwitches.includes(e.transaction ? "txn:" + e.transaction : "event:" + e.id));
-        for (const event of switches) this.rememberSwitch(event.transaction ? "txn:" + event.transaction : "event:" + event.id);
+        const unseen = switches.filter((e) => !this.state.handledSwitches.includes(this.switchKey(e.transaction ? "txn:" + e.transaction : "event:" + (e.id ?? `${e.at}:${e.kind}`))));
+        for (const event of switches) this.rememberSwitch(event.transaction ? "txn:" + event.transaction : "event:" + (event.id ?? `${event.at}:${event.kind}`));
         if (unseen.length > 0) {
           this.state.handoffs.codex = this.automaticCodex(
             settings,

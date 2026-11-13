@@ -738,3 +738,38 @@ test("manual switch replay and older events are ignored after persisted dedupe",
   await coordinator.tick(agents);
   assert.deepEqual(agents.reloads,[]);
 });
+
+test("late and same-time switch events are handled by identity rather than newest timestamp", async () => {
+  const {cli,agents,coordinator,advance} = setup();
+  agents.agents = [agent("c1","codex")];
+  cli.events_ = [{id:"newer",at:1100,provider:"codex",kind:"switched"}];
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,["c1"]);
+  advance(61);
+  cli.events_.push({id:"late",at:1050,provider:"codex",kind:"switched"},{id:"same-time",at:1100,provider:"codex",kind:"switched"});
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,["c1","c1"]);
+  advance(61); await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,["c1","c1"]);
+  assert.ok(cli.eventReads.every((since) => since === 1000));
+});
+
+test("maximum event identifiers never invalidate the persisted dedupe state", async () => {
+  const {handoffStateSchema} = await import("../shared/handoff.js");
+  for (const field of ["transaction","id"] as const) {
+    const {cli,agents,coordinator,store,advance} = setup();
+    agents.agents = [agent("c1","codex")];
+    cli.events_ = [{id:"event",at:1050,provider:"codex",kind:"switched",[field]:"x".repeat(512)}];
+    await coordinator.tick(agents);
+    assert.equal(handoffStateSchema.safeParse(store.saved).success,true);
+    assert.ok(store.saved!.handledSwitches.every((key) => key.length <= 512));
+    advance(61); await coordinator.tick(agents);
+    assert.deepEqual(agents.reloads,["c1"]);
+    const restarted = setup({},store.saved);
+    restarted.agents.agents = [agent("c1","codex")];
+    restarted.cli.events_ = cli.events_;
+    await restarted.coordinator.tick(restarted.agents);
+    assert.equal(restarted.store.setAsideCalls,0);
+    assert.deepEqual(restarted.agents.reloads,[]);
+  }
+});

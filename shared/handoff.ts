@@ -28,7 +28,7 @@ const id = z.string().max(128);
 export const handoffSchema = z.object({
   id,
   provider: handoffProviderSchema,
-  /** Saved account UUID to switch to; null for a reload-only handoff after an automatic switch. */
+  /** Saved account UUID to switch to; null for a reload-only handoff after a verified switch. */
   target: z.uuid().nullable(),
   targetAlias: text.nullable().default(null),
   trigger: z.enum(["manual", "automaticSwitch"]),
@@ -53,8 +53,9 @@ export const handoffStateSchema = z.object({
     codex: handoffSchema.nullable().default(null),
     agy: handoffSchema.nullable().default(null),
   }),
-  /** Newest automaticSwitch event time already handled (Unix seconds). */
+  /** Newest switch event time already handled (Unix seconds). */
   eventWatermark: z.number().finite().nullable().default(null),
+  handledSwitches: z.array(z.string().max(512)).max(200).default([]),
   /** One-time notice, for example after an unreadable state file was set aside. */
   notice: z.object({ code: z.string().max(64), message: z.string().max(1024) }).nullable().default(null),
 });
@@ -65,11 +66,11 @@ export const handoffSettings = defineSettings({
   scope: "host",
   version: 1,
   schema: z.object({
-    /** Reload idle Paseo Codex agents after the poller switched Codex automatically. */
+    /** Reload idle Paseo Codex agents after any verified Codex switch. */
     reloadCodexAfterAutomaticSwitch: z.boolean().default(true),
     /**
      * Restart the shared Codex daemon once every Paseo Codex agent is idle: --restart-daemon on a
-     * manual handoff, `codex daemon restart` while the CLI marks a restart pending after an automatic switch.
+     * manual handoff, `codex daemon restart` while the CLI marks a restart pending after a verified switch.
      */
     restartCodexDaemon: z.boolean().default(false),
     /** Let an automatic agy switch blocked only by agy sessions close idle Paseo agy agents and reopen them. */

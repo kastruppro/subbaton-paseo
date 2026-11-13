@@ -11,7 +11,7 @@ const base: Handoff = {
 
 test("handoff lines name the phase, target and coordinator message", () => {
   assert.equal(handoffLine(base), "Waiting for idle (to home): Waiting for 2 running turns to finish. Nothing is interrupted.");
-  assert.match(handoffLine({ ...base, trigger: "automaticSwitch", target: null, targetAlias: null }), /after automatic switch/);
+  assert.match(handoffLine({ ...base, trigger: "automaticSwitch", target: null, targetAlias: null }), /after verified switch/);
   assert.equal(handoffTone({ ...base, phase: "uncertain" }), "warning");
   assert.equal(handoffTone({ ...base, phase: "done" }), "ok");
 });
@@ -29,7 +29,7 @@ test("owner actions follow the phase", () => {
 test("cancel is offered while waiting and reopening; the confirmation names the effect", () => {
   assert.equal(handoffActions({ ...base, phase: "reopening", affected: ["a1"] }).cancel, true);
   assert.equal(handoffActions({ ...base, phase: "switching" }).cancel, false);
-  assert.match(handoffLine({ ...base, trigger: "automaticSwitch" }), /automatic switch to home/);
+  assert.match(handoffLine({ ...base, trigger: "automaticSwitch" }), /verified switch to home/);
   const agy = handoffEffect("agy", "home", false, 30);
   assert.match(agy, /closes those idle agy agents/);
   assert.match(agy, /never stopped/);

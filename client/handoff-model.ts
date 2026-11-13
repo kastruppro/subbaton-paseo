@@ -18,7 +18,7 @@ const phaseLabel: Record<Handoff["phase"], string> = {
 export function handoffLine(h: Handoff): string {
   const target =
     h.trigger === "automaticSwitch"
-      ? h.target ? `automatic switch to ${h.targetAlias ?? "saved account"}` : "after automatic switch"
+      ? h.target ? `verified switch to ${h.targetAlias ?? "saved account"}` : "after verified switch"
       : `to ${h.targetAlias ?? "saved account"}`;
   return `${phaseLabel[h.phase]} (${target}): ${h.message}`;
 }

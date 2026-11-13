@@ -14,7 +14,7 @@ test("handoff state file is owner-only, atomic and refuses symlinks", async () =
     const path = join(dir, "nested", "handoff-v1.json");
     const store = fileHandoffStore(path);
     assert.equal(await store.load(), null);
-    const state = { schemaVersion: 1 as const, handoffs: { codex: null, agy: null }, eventWatermark: 5, notice: null };
+    const state = { schemaVersion: 1 as const, handoffs: { codex: null, agy: null }, eventWatermark: 5, handledSwitches: [], notice: null };
     await store.save(state);
     assert.deepEqual(await store.load(), state);
     assert.equal((await stat(path)).mode & 0o777, 0o600);

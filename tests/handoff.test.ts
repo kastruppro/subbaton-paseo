@@ -41,7 +41,7 @@ class FakeCli implements HandoffCli {
   switches: { provider: string; target: string; options: SwitchOptions }[] = [];
   processes: AgyProcessInfo[] | null = [];
   outcome: SwitchOutcome = { kind: "switched", code: "switched", message: "Switched.", daemonOutcome: "not-requested" };
-  events_: { at: number; provider: string; kind: string }[] = [];
+  events_: { id?: string; transaction?: string; at: number; provider: string; kind: string }[] = [];
   eventReads: (number | null)[] = [];
   gate: Promise<void> | null = null;
   plan: { ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false } = { ok: true, blockedOnlyByProcesses: false, target: null };
@@ -700,3 +700,41 @@ test("RH3: agy started in a Paseo terminal pane (a shell between it and the daem
   assert.equal(cli.switches.length, 0);
 });
 
+
+test("manual Codex switch events reload only after idle and are not replayed", async () => {
+  const { cli, agents, coordinator, advance } = setup();
+  agents.agents = [agent("c1","codex","running",true)];
+  cli.events_ = [{id:"manual-1",transaction:"txn-1",at:1050,provider:"codex",kind:"switched"}];
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,[]);
+  agents.agents = [agent("c1","codex")];
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,["c1"]);
+  advance(61); await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,["c1"]);
+  assert.equal(cli.switches.length,0);
+});
+
+test("plugin-owned switch transaction is not reloaded twice by its event", async () => {
+  const {cli,agents,coordinator,advance,store} = setup();
+  agents.agents = [agent("c1","codex")];
+  cli.outcome = {kind:"switched",code:"switched",message:"verified",transaction:"own-txn"};
+  await coordinator.request("codex",target);
+  await coordinator.tick(agents);
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,["c1"]);
+  assert.ok(store.saved?.handledSwitches.includes("txn:own-txn"));
+  cli.events_ = [{id:"own-event",transaction:"own-txn",at:1055,provider:"codex",kind:"switched"}];
+  advance(61); await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,["c1"]);
+});
+
+
+test("manual switch replay and older events are ignored after persisted dedupe", async () => {
+  const initial = {schemaVersion:1,handoffs:{codex:null,agy:null},eventWatermark:1000,handledSwitches:["txn:handled"],notice:null};
+  const {cli,agents,coordinator} = setup({},initial);
+  agents.agents = [agent("c1","codex")];
+  cli.events_ = [{id:"old",transaction:"old",at:900,provider:"codex",kind:"switched"},{id:"repeat",transaction:"handled",at:1050,provider:"codex",kind:"switched"}];
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads,[]);
+});

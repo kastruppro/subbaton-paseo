@@ -34,6 +34,7 @@ export interface SwitchOutcome {
   kind: SwitchKind;
   code: string;
   message: string;
+  transaction?: string;
   daemonOutcome?: string | null;
   /** agy auto run-once: the CLI's 15-minute hold after a failed stop (Unix seconds). */
   retryAt?: number;
@@ -56,7 +57,7 @@ export interface SwitchOptions {
 export interface HandoffCli {
   agyProcesses(): Promise<{ ok: true; processes: AgyProcessInfo[] } | { ok: false }>;
   switchAccount(provider: HandoffProvider, target: string, options: SwitchOptions): Promise<SwitchOutcome>;
-  events(since: number | null): Promise<{ ok: true; events: { at: number; provider: string; kind: string }[] } | { ok: false }>;
+  events(since: number | null): Promise<{ ok: true; events: { id?: string; transaction?: string; at: number; provider: string; kind: string }[] } | { ok: false }>;
   knownAccount(provider: HandoffProvider, target: string): { alias: string } | null;
   /** agy auto plan: whether running agy processes are the only blocker of an automatic switch. */
   agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false }>;
@@ -132,7 +133,7 @@ const ok = (code: string, message: string): ActionResult => ({ outcome: "success
 const refuse = (code: string, message: string): ActionResult => ({ outcome: "error", code, message });
 
 export class HandoffCoordinator {
-  private state: HandoffState = { schemaVersion: 1, handoffs: { codex: null, agy: null }, eventWatermark: null, notice: null };
+  private state: HandoffState = { schemaVersion: 1, handoffs: { codex: null, agy: null }, eventWatermark: null, handledSwitches: [], notice: null };
   private ready: Promise<void> | null = null;
   private chain: Promise<unknown> = Promise.resolve();
   private lastEventPoll = -Infinity;
@@ -376,7 +377,7 @@ export class HandoffCoordinator {
     };
   }
 
-  /** A reload-only Codex handoff after an automatic switch; optionally restarts the shared daemon. */
+  /** A reload-only Codex handoff after a verified switch; optionally restarts the shared daemon. */
   private automaticCodex(settings: HandoffSettings, code: string, message: string): Handoff {
     const now = this.now();
     return {
@@ -399,6 +400,9 @@ export class HandoffCoordinator {
       daemonOutcome: null,
     };
   }
+  private rememberSwitch(key: string) {
+    this.state.handledSwitches = [...this.state.handledSwitches.filter((value) => value !== key), key].slice(-200);
+  }
   private async pollEvents() {
     if (this.now() - this.lastEventPoll < 60 || !terminal(this.state.handoffs.codex)) return;
     const settings = await this.settings();
@@ -410,11 +414,14 @@ export class HandoffCoordinator {
       const fresh = read.events.filter((e) => e.at > watermark);
       if (fresh.length > 0) {
         this.state.eventWatermark = Math.max(...fresh.map((e) => e.at));
-        if (fresh.some((e) => e.provider === "codex" && e.kind === "automaticSwitch")) {
+        const switches = fresh.filter((e) => e.provider === "codex" && ["automaticSwitch","switched"].includes(e.kind));
+        const unseen = switches.filter((e) => !this.state.handledSwitches.includes(e.transaction ? "txn:" + e.transaction : "event:" + e.id));
+        for (const event of switches) this.rememberSwitch(event.transaction ? "txn:" + event.transaction : "event:" + event.id);
+        if (unseen.length > 0) {
           this.state.handoffs.codex = this.automaticCodex(
             settings,
             "queued",
-            "Codex switched automatically. Waiting until Paseo Codex agents are idle to pick up the new login.",
+            "Codex switched. Waiting until Paseo Codex agents are idle to pick up the new login.",
           );
         }
         await this.persist();
@@ -425,7 +432,7 @@ export class HandoffCoordinator {
     // A failed attempt is not retried for 15 minutes, so a broken daemon is not restarted every minute.
     if (!settings.restartCodexDaemon || this.now() - this.lastDaemonAttempt < 900) return;
     if ((await this.cli.codexDaemonPending()) !== true) return;
-    this.state.handoffs.codex = { ...this.automaticCodex(settings, "daemonPending", "A Codex daemon restart is pending after an automatic switch. Waiting until Paseo Codex agents are idle."), restartDaemon: true };
+    this.state.handoffs.codex = { ...this.automaticCodex(settings, "daemonPending", "A Codex daemon restart is pending after a switch. Waiting until Paseo Codex agents are idle."), restartDaemon: true };
     await this.persist();
   }
   /**
@@ -612,6 +619,10 @@ export class HandoffCoordinator {
       h.provider === "agy" && h.trigger === "automaticSwitch"
         ? await this.cli.agyAutoRunOnce(options.onlyPids ?? [])
         : await this.cli.switchAccount(h.provider, h.target, options);
+    if (h.provider === "codex" && out.kind === "switched" && out.transaction) {
+      this.rememberSwitch("txn:" + out.transaction);
+      await this.persist();
+    }
     const daemonOutcome = out.daemonOutcome ?? null;
     if (out.retryAt !== undefined) this.agyRetryAt = out.retryAt;
     switch (out.kind) {

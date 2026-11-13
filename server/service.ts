@@ -757,13 +757,13 @@ export class SubBatonService {
           message: response.error.message,
         };
       }
-      const result = response.result as { outcome?: unknown; postSwitchVerification?: unknown; daemonOutcome?: unknown };
+      const result = response.result as { transaction?: unknown; outcome?: unknown; postSwitchVerification?: unknown; daemonOutcome?: unknown };
       const daemonOutcome = typeof result.daemonOutcome === "string" ? result.daemonOutcome.slice(0, 64) : null;
       if (result.outcome === "alreadyActive" || result.outcome === "unchanged")
         return { kind: "unchanged", code: "alreadyActive", message: "That account was already active.", daemonOutcome };
       const verified = provider === "agy" ? ["verified", "reapplied"] : ["verified"];
       if (result.outcome === "switched" && verified.includes(String(result.postSwitchVerification)))
-        return { kind: "switched", code: "switched", message: "Switch verified.", daemonOutcome };
+        return { kind: "switched", code: "switched", message: "Switch verified.", daemonOutcome, transaction: typeof result.transaction === "string" && result.transaction.length <= 256 ? result.transaction : undefined };
       return { kind: "uncertain", code: "uncertain", message: "The switch could not be verified.", daemonOutcome };
     } finally {
       this.invalidate();

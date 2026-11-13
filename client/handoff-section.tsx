@@ -93,15 +93,15 @@ export function HandoffSection({ hostId, colors }: { hostId: string; colors: Col
       {prefs.status === "ready" && (
         <SettingsCard>
           <SettingsSwitch
-            label="Reload Codex agents after automatic switches"
-            hint="When the poller switches Codex, reload idle Paseo Codex agents so they use the new login. Running turns are never interrupted."
+            label="Reload Codex agents after every verified switch"
+            hint="After a verified Codex switch from the app, terminal or poller, reload idle Paseo Codex agents so they use the new login. Running turns are never interrupted."
             value={prefs.values.reloadCodexAfterAutomaticSwitch}
             disabled={prefs.saving}
             onValueChange={(value) => void prefs.save({ ...prefs.values, reloadCodexAfterAutomaticSwitch: value }, prefs.revision)}
           />
           <SettingsSwitch
             label="Restart the shared Codex daemon at the idle boundary"
-            hint="Off by default. Once every Paseo Codex agent is idle: --restart-daemon on When idle, and codex daemon restart while a restart is pending after an automatic switch. Terminal Codex sessions attached to the daemon may need codex resume."
+            hint="Off by default. Once every Paseo Codex agent is idle: --restart-daemon on When idle, and codex daemon restart while a restart is pending after a switch. Terminal Codex sessions attached to the daemon may need codex resume."
             value={prefs.values.restartCodexDaemon}
             disabled={prefs.saving}
             onValueChange={(value) => void prefs.save({ ...prefs.values, restartCodexDaemon: value }, prefs.revision)}

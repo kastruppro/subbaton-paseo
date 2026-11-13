@@ -26,10 +26,11 @@ test("handoff switch uses fixed argv and requires post-switch verification", asy
 
 test("Codex handoff passes --restart-daemon only when asked and reports the daemon outcome", async () => {
   const { cli, service } = await withStatus("codex");
-  cli.on(["codex", "switch"], ok({ outcome: "switched", postSwitchVerification: "verified", daemonOutcome: "restarted" }));
+  cli.on(["codex", "switch"], ok({ outcome: "switched", postSwitchVerification: "verified", daemonOutcome: "restarted", transaction:"own-txn" }));
   const out = await service.handoffSwitch("codex", target, { restartDaemon: true });
   assert.equal(out.kind, "switched");
   assert.equal(out.daemonOutcome, "restarted");
+  assert.equal(out.transaction,"own-txn");
   assert.deepEqual(cli.calls.at(-1)?.argv, ["codex", "switch", target, "--restart-daemon", "--json"]);
 });
 

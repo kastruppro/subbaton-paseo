@@ -231,6 +231,7 @@ export function validValue(
       return typeof value === "string" && (!field.enum || field.enum.includes(value));
     case "array": {
       if (!Array.isArray(value)) return false;
+      if (field.path === "trustedExecutableOwners") return value.length <= 8 && new Set(value).size === value.length && value.every((name) => typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(name));
       if (field.path !== "order") return true;
       const ids = section.accounts.map((a) => a.id);
       return value.length === ids.length && new Set(value).size === ids.length && value.every((v) => ids.includes(v));
@@ -277,7 +278,7 @@ export function validateChanges(
     }
     const resolved = resolveField(section, path);
     if (!resolved || resolved.field.type === "unknown") return { ok: false, code: "invalidSetting" };
-    if (!validValue(section, resolved.field, value, resolved.child)) return { ok: false, code: "invalidSetting" };
+    if (!validValue(section, resolved.field, value, resolved.child)) return { ok: false, code: resolved.field.path === "trustedExecutableOwners" ? "invalidTrustedExecutableOwners" : "invalidSetting" };
     const canonical = path.join("/");
     if (touched.some((t) => t === canonical || t.startsWith(canonical + "/") || canonical.startsWith(t + "/")))
       return { ok: false, code: "overlappingChanges" };

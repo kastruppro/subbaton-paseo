@@ -36,6 +36,7 @@ import {
   humanize,
   move,
   orderView,
+  parseOwnerNames,
   parseNumber,
   planSummary,
   providerGroups,
@@ -282,12 +283,14 @@ function DictionaryField({
 }
 
 function FieldControl({
+  error,
   view,
   disabled,
   colors,
   update,
   revisionKey,
 }: {
+  error?: string | null;
   view: FieldView;
   disabled: boolean;
   colors: Colors;
@@ -296,6 +299,10 @@ function FieldControl({
 }) {
   const control = view.control;
   switch (control.kind) {
+    case "stringList":
+      return <SettingsInput label={view.field.title} hint={hintFor(view)} error={error} disabled={disabled}
+        initialValue={Array.isArray(view.value) ? view.value.join(", ") : ""}
+        onChangeText={(text) => update(view.path, parseOwnerNames(text))} />;
     case "switch":
       return (
         <SettingsSwitch
@@ -811,7 +818,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
           <SettingsSection key={group.title} title={group.title}>
             <SettingsCard>
               {group.fields.map((view) => (
-                <FieldControl key={view.key} view={view} disabled={!editable} colors={colors} update={update} revisionKey={revisionKey} />
+                <FieldControl key={view.key} view={view} error={view.field.path === "trustedExecutableOwners" && notices[selected]?.code === "invalidTrustedExecutableOwners" ? notices[selected]?.message : null} disabled={!editable} colors={colors} update={update} revisionKey={revisionKey} />
               ))}
             </SettingsCard>
           </SettingsSection>

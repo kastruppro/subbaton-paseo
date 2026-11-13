@@ -6,6 +6,7 @@ export const settingsMessages: Record<string, string> = {
   busy: "Provider settings are busy. Retry shortly.",
   revisionConflict:
     "Settings changed elsewhere (another device, the CLI or an account change). The latest values were reloaded; review them and apply again.",
+  invalidTrustedExecutableOwners: "Enter up to eight distinct existing local account names for extra trusted executable owners. No paths or groups are accepted.",
   invalidSetting:
     "A value is outside the field's type, range or allowed values. Nothing was saved.",
   overlappingChanges:

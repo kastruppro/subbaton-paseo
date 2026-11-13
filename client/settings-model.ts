@@ -27,6 +27,7 @@ export type Control =
     }
   | { kind: "dictionary"; keys: string[]; child: SettingsField | null }
   | { kind: "order" }
+  | { kind: "stringList" }
   | { kind: "unsupported" };
 
 export interface FieldView {
@@ -84,7 +85,7 @@ export function controlFor(section: SettingsSection, field: SettingsField, value
       return { kind: "dictionary", keys, child };
     }
     case "array":
-      return field.path === "order" ? { kind: "order" } : { kind: "unsupported" };
+      return field.path === "trustedExecutableOwners" ? { kind: "stringList" } : field.path === "order" ? { kind: "order" } : { kind: "unsupported" };
     default:
       return { kind: "unsupported" };
   }
@@ -127,7 +128,7 @@ export const groupOrder = [
 ] as const;
 export type GroupTitle = (typeof groupOrder)[number];
 export function groupFor(path: string): GroupTitle {
-  if (path === "daemonAutoRestart") return "Codex";
+  if (["daemonAutoRestart", "trustedExecutableOwners"].includes(path)) return "Codex";
   if (["autoEnabled", "strategy", "cooldownMinutes", "improvementMargin"].includes(path)) return "Automatic switching";
   if (path.startsWith("thresholds.")) return "Thresholds";
   if (path.startsWith("weeklyResetPriority.")) return "Weekly reset priority";
@@ -342,3 +343,5 @@ export function autoEnabledChanges(draft: Draft): boolean[] {
     .map(({ value }) => value as boolean);
 }
 
+
+export const parseOwnerNames = (text: string): string[] => text === "" ? [] : text.split(",").map((name) => name.trim());

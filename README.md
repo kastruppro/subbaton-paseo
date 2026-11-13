@@ -20,3 +20,10 @@ Phase 6b settings: the "SubBaton settings" screen renders every field from `subb
 
 Phase 6b handoff: "When idle" (Codex/agy) waits until every Paseo agent of that provider is idle, lets the CLI switch (agy with `--stop-agy`), requires a verified result and reopens the affected agents with `agent.reload()`. Codex agents are also reloaded after automatic switches. See docs/decisions.md.
 
+
+
+## Extra trusted Codex executable owners (owner decision, 2026-11-13)
+
+The Codex settings tab renders the CLI’s `trustedExecutableOwners` array as a comma-separated local-account field. The default is empty; list at most eight distinct existing local user names (for example a dedicated Homebrew service account). The CLI resolves names and refuses unknown names with `invalidTrustedExecutableOwners`, shown inline while retaining the draft. The host validates shape and bounds before calling the CLI; it never resolves Mac accounts on the phone or relay. This setting is Codex-only and bumps the revision.
+
+Automatic restarts require the executable, any Node interpreter and every parent directory to be owned by the current user, root or one of the listed users, with no group/world write. Group membership never grants trust. Names that no longer resolve grant no UID at runtime. The CLI rechecks ownership immediately before launch; idle/coordinator guards are unchanged.

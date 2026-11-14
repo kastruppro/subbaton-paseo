@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { realpath, stat, access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, isAbsolute, delimiter, normalize } from "node:path";
@@ -91,6 +93,8 @@ export async function resolveBinary(
   allowPathLookup = false,
   system: BinarySystem = nativeSystem,
 ): Promise<string> {
+  const isDefault = path === defaultBinary;
+  if (isDefault) path = join(homedir(), "Library/Application Support/SubBaton/bin/subbaton");
   if (
     !path ||
     path.length > 4096 ||
@@ -105,7 +109,7 @@ export async function resolveBinary(
       canonical = await system.realpath(path);
     } catch (error) {
       if (!absent(error)) throw new BinaryTrustError("permissions");
-      if (path !== defaultBinary || !allowPathLookup)
+      if (!isDefault || !allowPathLookup)
         throw new BinaryTrustError("missing");
     }
   }

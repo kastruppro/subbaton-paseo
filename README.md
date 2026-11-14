@@ -37,3 +37,5 @@ Switch transaction IDs flow from the CLI response into a bounded persisted handl
 
 
 The coordinator keeps its first-start event boundary and rereads the CLI’s bounded log with `events --since` rather than advancing to the newest timestamp. Persisted transaction/event identities suppress replay, so delayed writes and equal timestamps remain eligible. Existing state files keep their stored boundary. Dedupe keys exceeding the 512-character saved-schema bound are SHA-256 encoded consistently before lookup and save; a long CLI identifier cannot invalidate the state file. Events evicted from the CLI’s bounded log before a successful poll cannot be recovered.
+
+The default CLI is `$HOME/Library/Application Support/SubBaton/bin/subbaton`, resolved from the daemon user’s home. Install it through the app’s **Settings > Background > Install**; the app keeps it updated. Saved custom paths remain unchanged. The sticky `/Users/Shared` ancestor exception remains for legacy custom installations.

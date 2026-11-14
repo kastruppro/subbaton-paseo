@@ -2,26 +2,17 @@
 
 Use Paseo **0.15.3 or newer** on both daemon and client, and a signed SubBaton CLI built from current app source. The old phase worktrees were removed after merge. For a future build, create a new app feature worktree with `wt switch --create <branch> --no-cd`, run `scripts/build-signed.sh` there, and set `APP_BUILD` to its `build/subbaton` before the commands below. The plugin is trusted, unsandboxed code; install only on the intended daemon. Development did not install it or change the running daemon.
 
-1. Verify the signed CLI and copy it to the default shared location, or set its absolute path later under the plugin's settings. Inspect any pre-existing /Users/Shared/subbaton directory first: it must belong to root or your current user and must not be group/world-writable. Do not reuse a folder planted by another local user; have the owner repair/remove it through normal administrative controls. The plugin refuses untrusted custody before executing anything:
-
-```sh
-export APP_BUILD="/absolute/path/to/new/app/worktree/build/subbaton"
-test -f "$APP_BUILD" || { echo "STOP: signed build missing"; exit 1; }
-/usr/bin/codesign --verify --strict --verbose=2 "$APP_BUILD"
-install -d -m 755 /Users/Shared/subbaton
-install -m 755 "$APP_BUILD" /Users/Shared/subbaton/subbaton
-/usr/bin/codesign --verify --strict --verbose=2 /Users/Shared/subbaton/subbaton
-```
+1. Open the SubBaton app and choose **Settings > Background > Install**. The app installs and keeps its CLI updated at `$HOME/Library/Application Support/SubBaton/bin/subbaton`. The plugin resolves this default from the daemon user's home. Existing saved custom paths remain unchanged; select the new path explicitly to follow the app-managed copy.
 
 Expected identifier dk.kastruppro.subbaton, Team 5W98EXLE44, hardened runtime and secure timestamp. Do not re-sign ad hoc. PATH lookup is **off by default**. Enable “Allow verified PATH lookup” explicitly in the host settings before using `subbaton` on PATH or permitting fallback from a missing default. A missing custom absolute path never falls back. Every actual execution verifies the canonical file and all parents: root/current-user ownership, no group/world write, plus Developer ID/team/identifier through codesign. Root-owned sticky /Users/Shared is the only writable ancestor exception and cannot be the direct parent.
 
 2. As the account whose subscriptions you intend to manage, bootstrap safe snapshots once. These list commands use the signed CLI's vault; the plugin itself never reads credentials:
 
 ```sh
-/Users/Shared/subbaton/subbaton list --json
-/Users/Shared/subbaton/subbaton codex list --json
-/Users/Shared/subbaton/subbaton agy list --json
-/Users/Shared/subbaton/subbaton status --json
+"$HOME/Library/Application Support/SubBaton/bin/subbaton" list --json
+"$HOME/Library/Application Support/SubBaton/bin/subbaton" codex list --json
+"$HOME/Library/Application Support/SubBaton/bin/subbaton" agy list --json
+"$HOME/Library/Application Support/SubBaton/bin/subbaton" status --json
 ```
 
 Skip providers you have not configured; their snapshot remains missing. Add/login operations are documented in the app's live-test checklists. A missing snapshot is not proof of no accounts.
@@ -29,12 +20,12 @@ Skip providers you have not configured; their snapshot remains missing. Add/logi
 3. Verify this exact local plugin checkout, then install it:
 
 ```sh
-cd /path/to/subbaton-paseo
+cd "$HOME/path/to/subbaton-paseo"
 npm ci --ignore-scripts --legacy-peer-deps
 npm test
 npm run typecheck
 npm run build
-paseo plugin install /path/to/subbaton-paseo
+paseo plugin install "$HOME/path/to/subbaton-paseo"
 paseo plugin ls
 paseo plugin logs subbaton
 ```
@@ -68,7 +59,7 @@ The owner-approved popover redesign uses the same plugin ID, runtime requirement
 After tests/typecheck/build are green, run this from a **root shell**. This updates the existing root-controlled shared checkout; it does not run the CLI or provider processes:
 
 ```sh
-rsync -a --delete --exclude='.git' --exclude='node_modules' --exclude='build' /path/to/subbaton-paseo/ /Users/Shared/subbaton/paseo-plugin/
+rsync -a --delete --exclude='.git' --exclude='node_modules' --exclude='build' "$HOME/path/to/subbaton-paseo"/ /Users/Shared/subbaton/paseo-plugin/
 chown -R root:wheel /Users/Shared/subbaton/paseo-plugin
 chmod -R go-w /Users/Shared/subbaton/paseo-plugin
 ```

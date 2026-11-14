@@ -32,7 +32,7 @@ function BinaryForm({
     <SettingsCard>
       <SettingsInput
         label="SubBaton binary"
-        hint="Absolute signed path. Canonical ownership, permissions and Developer ID are verified before execution."
+        hint="Default: $HOME/Library/Application Support/SubBaton/bin/subbaton, using the daemon user’s home. Install via the app’s Settings > Background > Install; the app keeps it updated. Saved custom paths remain unchanged. Canonical ownership, permissions and Developer ID are verified before execution."
         initialValue={initial}
         onChangeText={setPath}
       />

@@ -96,7 +96,7 @@ test("M2 never falls back to PATH without opt-in; PATH entries receive the same 
     resolveBinary("/Users/Shared/subbaton/subbaton", false, f.system),
   );
   assert.equal(
-    await resolveBinary("/Users/Shared/subbaton/subbaton", true, f.system),
+    await resolveBinary(hostSettings.schema.parse({}).binaryPath, true, f.system),
     "/safe/subbaton",
   );
   await assert.rejects(resolveBinary("subbaton", false, f.system));
@@ -156,4 +156,27 @@ test("M2 custom missing path never falls back and non-executable files refuse", 
   f.values.get("/safe/subbaton")!.executable = false;
   await assert.rejects(resolveBinary("/safe/subbaton", false, f.system));
   assert.equal(f.signed.length, 0);
+});
+
+test("default resolves from temporary daemon homes while saved custom paths stay unchanged", async () => {
+  const previous = process.env.HOME;
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { defaultBinary } = await import("../shared/defaults.js");
+  const home = await mkdtemp(join(tmpdir(), "subbaton-home-"));
+  try {
+    process.env.HOME = home;
+    const f = fixture();
+    const seen: string[] = [];
+    f.system.realpath = async (path) => { seen.push(path); return "/safe/subbaton"; };
+    await resolveBinary(defaultBinary, false, f.system);
+    assert.deepEqual(seen, [join(home, "Library/Application Support/SubBaton/bin/subbaton")]);
+    seen.length = 0;
+    await resolveBinary("/Users/Shared/subbaton/subbaton", false, f.system);
+    assert.deepEqual(seen, ["/Users/Shared/subbaton/subbaton"]);
+  } finally {
+    if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous;
+    await rm(home, { recursive: true, force: true });
+  }
 });

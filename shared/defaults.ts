@@ -1,1 +1,1 @@
-export const defaultBinary = "/Users/Shared/subbaton/subbaton";
+export const defaultBinary = "$HOME/Library/Application Support/SubBaton/bin/subbaton";

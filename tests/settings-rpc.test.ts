@@ -91,7 +91,7 @@ test("settings get access failures are static and redacted", async () => {
   }
   const cli = scripted().cli;
   const untrusted = new SubBatonService(cli, async () => {
-    throw new Error("/Users/x/secret-token");
+    throw new Error("/example/secret-token");
   });
   const result = await untrusted.settings({});
   assert.equal(result.error?.code, "configuration");
@@ -401,7 +401,7 @@ test("argv-bound values cannot start with a dash and must match the newest known
 
 test("poller install keeps pinned provider homes unless the owner explicitly chooses otherwise", async () => {
   const { cli, service } = scripted();
-  const pinned = { CODEX_HOME: "/Users/x/work/codex" };
+  const pinned = { CODEX_HOME: "/example/work/codex" };
   cli.on(["poller", "status"], ok({ installed: true, loaded: true, lastTickAt: 1, stale: false, binary: "/fixture/subbaton", providers: {}, pinnedEnvironment: pinned }));
   const read = await service.pollerStatus({});
   assert.deepEqual(read.data?.pinnedEnvironment, pinned);

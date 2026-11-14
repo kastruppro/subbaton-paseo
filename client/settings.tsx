@@ -14,6 +14,7 @@ import {
   type DisplaySettings,
 } from "../shared/contracts.js";
 import { providerLabel, windowTitle } from "./display.js";
+import { maxFooterItems } from "../shared/contracts.js";
 import { useStatus } from "./use-status.js";
 function BinaryForm({
   initial,
@@ -161,7 +162,10 @@ export function SettingsScreen(props: PluginSurfaceProps) {
                   key={`${item.provider}:${item.windowId}`}
                   label={`${providerLabel[item.provider]} · ${labels.get(`${item.provider}:${item.windowId}`) ?? windowTitle(item.windowId)}`}
                   value={checked}
-                  disabled={display.saving}
+                  disabled={
+                    display.saving ||
+                    (!checked && display.values.items.length >= maxFooterItems)
+                  }
                   onValueChange={(value) =>
                     void display.save(
                       {
@@ -187,7 +191,8 @@ export function SettingsScreen(props: PluginSurfaceProps) {
           </Text>
         )}
         <Text style={{ fontSize: 12, color: c.foregroundMuted }}>
-          agy and additional model windows appear after a verified CLI usage
+          Up to {maxFooterItems} items: 1–3 fill one row of the footer box, 4–6
+          two rows. agy and additional model windows appear after a verified CLI usage
           reading. Missing or stale values show unknown or ~, never a fresh
           zero.
         </Text>

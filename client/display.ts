@@ -93,40 +93,6 @@ export function windowTitle(id: string, label?: string) {
   );
 }
 
-export function stripLayout(width: number, count: number) {
-  const available = Math.max(0, Number.isFinite(width) ? width : 0),
-    total = Math.max(0, Math.min(24, Math.floor(count)));
-  for (const [unit, labels, meters] of [
-    [160, true, true],
-    [120, false, true],
-    [96, false, false],
-  ] as const) {
-    if (total * unit <= available)
-      return {
-        count: total,
-        hidden: 0,
-        labels,
-        meters,
-        usedWidth: total * unit,
-      };
-  }
-  const shown = Math.min(total, Math.max(0, Math.floor((available - 24) / 96)));
-  return {
-    count: shown,
-    hidden: total - shown,
-    labels: false,
-    meters: false,
-    usedWidth: Math.min(available, shown * 96 + 24),
-  };
-}
-export function shortWindowTitle(id: string, label?: string) {
-  if (id === "five_hour" || label === "5-hour limit") return "5h";
-  if (id === "seven_day" || label === "Weekly limit") return "7d";
-  if (id === "codex:primary_window") return "P";
-  if (id === "codex:secondary_window") return "S";
-  return windowTitle(id, label).slice(0, 4);
-}
-
 export function windowLength(
   provider: Provider,
   window: Window,
@@ -260,20 +226,6 @@ export function windowPresentation(
     accessibility: `${window.label}: ${passed ? "unknown after reset" : percentText(window.usedPercent, old, window.inferred)} used${old ? ", stale reading" : ""}. ${reset}. Absolute reset ${timestamp(window.resetsAt)}. Last read ${relativeAge(window.fetchedAt, now)} (${timestamp(window.fetchedAt !== null && window.fetchedAt > 0 ? window.fetchedAt : null)}).`,
   };
 }
-export function splitWindows(provider: Provider, windows: Window[]) {
-  const preferred =
-    provider === "claude"
-      ? ["five_hour", "seven_day"]
-      : provider === "codex"
-        ? ["codex:primary_window", "codex:secondary_window"]
-        : windows.some((w) => w.id.startsWith("gemini:"))
-          ? ["gemini:5h", "gemini:weekly"]
-          : ["claude-gpt:5h", "claude-gpt:weekly"];
-  let main = preferred.flatMap((id) => windows.filter((w) => w.id === id));
-  if (main.length === 0) main = windows.slice(0, 2);
-  const ids = new Set(main.map((w) => w.id));
-  return { main, extra: windows.filter((w) => !ids.has(w.id)) };
-}
 export function accountTone(
   account: Account | undefined,
   warning: number,
@@ -299,30 +251,6 @@ export function accountTone(
       : tones.includes("unknown") || account.windows.length === 0
         ? "unknown"
         : "normal";
-}
-export function compactWindowLabel(provider: Provider, window: Window): string {
-  if (provider === "claude")
-    return window.id === "five_hour"
-      ? "5h"
-      : window.id === "seven_day"
-        ? "Week"
-        : window.id.startsWith("weekly_scoped:")
-          ? window.id.slice(14)
-          : window.label;
-  if (provider === "agy") {
-    const group = window.id.startsWith("gemini:")
-      ? "Gemini"
-      : window.id.startsWith("claude-gpt:")
-        ? "C/GPT"
-        : "";
-    if (group && /:(5h|weekly)$/.test(window.id))
-      return `${group} ${window.id.endsWith(":weekly") ? "wk" : "5h"}`;
-  }
-  if (window.windowSeconds === 604800 || /weekly limit/i.test(window.label))
-    return "Week";
-  if (window.windowSeconds === 18000 || /5-hour limit/i.test(window.label))
-    return "5h";
-  return window.label;
 }
 export function lastRead(account: Account): number | null {
   const times = account.windows.flatMap((w) =>
@@ -354,6 +282,10 @@ export function themePalette(theme: PluginTheme) {
     warning: c.statusWarning,
     danger: c.statusDanger,
     track: c.surface2,
+    trackEdge: c.border,
+    fill: c.foregroundMuted,
+    accent: c.accent,
+    onAccent: c.accentForeground,
     focus: c.accent,
     tick: c.foreground,
   };

@@ -5,7 +5,6 @@ import {
   relativeReset,
   relativeAge,
   windowPresentation,
-  splitWindows,
   accountTone,
 } from "../client/display.js";
 import type { Window, Account } from "../shared/contracts.js";
@@ -111,30 +110,6 @@ test("stale bars retain threshold tone, dim and show clock, never tilde; only in
   assert.equal(inferred.percent, "≈0%");
   assert.equal(inferred.tick, null);
   assert.equal(inferred.reset, "reset, presumed fresh");
-});
-test("main windows stay compact and model/second-group rows remain in details", () => {
-  const rows = [
-    window("weekly_scoped:Fable"),
-    window("seven_day"),
-    window("five_hour"),
-  ];
-  assert.deepEqual(
-    splitWindows("claude", rows).main.map((v) => v.id),
-    ["five_hour", "seven_day"],
-  );
-  assert.deepEqual(
-    splitWindows("claude", rows).extra.map((v) => v.id),
-    ["weekly_scoped:Fable"],
-  );
-  const agy = [
-    window("claude-gpt:5h"),
-    window("gemini:weekly"),
-    window("gemini:5h"),
-  ];
-  assert.deepEqual(
-    splitWindows("agy", agy).main.map((v) => v.id),
-    ["gemini:5h", "gemini:weekly"],
-  );
 });
 test("tab dot is the worst active tone, including health", () => {
   const account = {

@@ -42,6 +42,19 @@ export const accountSchema = z.object({
   warnings: z.array(text).max(8).optional(),
   windows: z.array(windowSchema).max(256),
 });
+/** Optional contract additions; anything malformed is treated as absent so older CLIs keep working. */
+const autoSchema = z
+  .object({
+    enabled: z.boolean(),
+    paused: z.boolean(),
+    pauseReason: text.nullable().optional(),
+    pauseId: text.nullable().optional(),
+    message: text.nullable().optional(),
+    lastAutomaticSwitchAt: z.number().finite().nullable().optional(),
+  })
+  .nullable()
+  .optional()
+  .catch(undefined);
 const providerStatusSchema = z.preprocess(
   (value) => {
     if (
@@ -64,6 +77,14 @@ const providerStatusSchema = z.preprocess(
       ),
     updatedAt: z.number().finite().optional(),
     accounts: z.array(accountSchema).max(256),
+    auto: autoSchema,
+    daemonRestartPending: z.boolean().nullable().optional().catch(undefined),
+    daemonRestartPendingSince: z
+      .number()
+      .finite()
+      .nullable()
+      .optional()
+      .catch(undefined),
   }),
 );
 export const statusSchema = z.object({
@@ -81,6 +102,7 @@ export const statusSchema = z.object({
 });
 export type Status = z.infer<typeof statusSchema>;
 export type Account = z.infer<typeof accountSchema>;
+export type ProviderStatus = Status["providers"][number];
 export type Window = z.infer<typeof windowSchema>;
 export const actionSchema = z.object({
   outcome: z.enum(["success", "unchanged", "uncertain", "error"]),
@@ -142,22 +164,26 @@ export const hostSettings = defineSettings({
     binaryPath: z.string().min(1).max(4096).default(defaultBinary),
   }),
 });
+export const maxFooterItems = 6;
 export const displaySchema = z
   .object({
     items: z
-      .array(
-        z.object({
-          provider: providerSchema,
-          windowId: z.string().min(1).max(512),
-        }),
+      .preprocess(
+        (value) => (Array.isArray(value) ? value.slice(0, maxFooterItems) : value),
+        z.array(
+          z.object({
+            provider: providerSchema,
+            windowId: z.string().min(1).max(512),
+          }),
+        ),
       )
-      .max(24)
       .default([
         { provider: "claude", windowId: "five_hour" },
         { provider: "codex", windowId: "codex:primary_window" },
+        { provider: "agy", windowId: "gemini:5h" },
       ]),
-    warning: z.number().min(1).max(99).default(75),
-    danger: z.number().min(1).max(100).default(90),
+    warning: z.number().min(1).max(99).default(80),
+    danger: z.number().min(1).max(100).default(100),
   })
   .refine((v) => v.warning < v.danger, {
     message: "Warning must be below danger.",

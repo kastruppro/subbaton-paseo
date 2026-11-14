@@ -6,7 +6,6 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
-import type { PluginTheme } from "@getpaseo/plugin";
 import {
   useRpc,
   useSettings,
@@ -23,22 +22,14 @@ import {
   type Window,
   type Account,
   type Provider,
+  type ProviderStatus,
 } from "../shared/contracts.js";
 import {
   chooseItems,
-  percentText,
   providerIcon,
   providerLabel,
-  severity,
-  stale,
   timestamp,
-  windowTitle,
-  stripLayout,
-  shortWindowTitle,
   windowPresentation,
-  splitWindows,
-  accountTone,
-  compactWindowLabel,
   relativeAge,
   lastRead,
   popoverBodyHeight,
@@ -47,10 +38,36 @@ import {
   providerNotices,
   shortWarning,
 } from "./display.js";
+import {
+  footerCell,
+  footerGrid,
+  footerSummary,
+  narrowFooterWidth,
+  type FooterCell,
+} from "./footer-model.js";
+import {
+  accountBadge,
+  autoLines,
+  canSwitch,
+  handoffRow,
+  idleExplanation,
+  miniWindows,
+  otherAccountSummary,
+  providerLine,
+  rowGlyph,
+  switchChoices,
+  windowLabel,
+  type RowLine,
+  type Tone,
+} from "./popover-model.js";
 import { useStatus } from "./use-status.js";
 import { useHandoff } from "./use-handoff.js";
-import { handoffActive, handoffEffect, handoffLine, handoffTone } from "./handoff-model.js";
-import { handoffRequestRpc, handoffSettings } from "../shared/handoff.js";
+import { handoffLine } from "./handoff-model.js";
+import {
+  handoffControlRpc,
+  handoffRequestRpc,
+  handoffSettings,
+} from "../shared/handoff.js";
 type Palette = ReturnType<typeof themePalette>;
 const PaletteContext = createContext<Palette | null>(null);
 function usePalette() {
@@ -62,63 +79,107 @@ const toneColor = (tone: string, palette: Palette) =>
     : tone === "warning"
       ? palette.warning
       : tone === "normal"
-        ? palette.ok
+        ? palette.fill
         : palette.faint;
-function Meter({
-  window,
-  warning = 75,
-  danger = 90,
-  offline = false,
-  showBar = true,
+const providerTitle = (provider: Provider) =>
+  provider === "claude" ? "Claude Code" : providerLabel[provider];
+const lineColor = (tone: RowLine["tone"], palette: Palette) =>
+  tone === "danger" ? palette.danger : tone === "warning" ? palette.warning : palette.muted;
+/** Track with a hairline edge so the empty part stays visible on light sidebars. */
+function MiniMeter({
+  fill,
+  tone,
+  dim = false,
+  width,
 }: {
-  theme: PluginTheme;
-  window: Window | null;
-  warning?: number;
-  danger?: number;
-  offline?: boolean;
-  showBar?: boolean;
+  fill: number;
+  tone: string;
+  dim?: boolean;
+  width?: number;
 }) {
   const palette = usePalette();
-  const passed =
-    window &&
-    !window.inferred &&
-    window.resetsAt !== null &&
-    window.resetsAt <= Date.now() / 1000;
-  const old = window ? stale(window, offline) : true,
-    value = passed ? null : (window?.usedPercent ?? null);
-  const color = toneColor(severity(value, false, warning, danger), palette);
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-      {showBar && (
-        <View
+    <View
+      importantForAccessibility="no"
+      style={{
+        flex: width ? undefined : 1,
+        width,
+        minWidth: 9,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: palette.track,
+        borderWidth: 0.5,
+        borderColor: palette.trackEdge,
+        overflow: "hidden",
+      }}
+    >
+      <View
+        style={{
+          width: `${Math.max(fill > 0 ? 3 : 0, Math.min(100, fill))}%`,
+          height: "100%",
+          backgroundColor: tone === "normal" || tone === "unknown" ? palette.fill : toneColor(tone, palette),
+          opacity: dim ? 0.4 : 1,
+        }}
+      />
+    </View>
+  );
+}
+function FooterCellView({
+  provider,
+  cell,
+}: {
+  provider: Provider;
+  cell: FooterCell;
+}) {
+  const palette = usePalette();
+  const color =
+    cell.kind === "stale" || cell.kind === "unknown"
+      ? palette.muted
+      : cell.tone === "danger"
+        ? palette.danger
+        : cell.tone === "warning"
+          ? palette.warning
+          : palette.text;
+  return (
+    <View
+      style={{
+        flex: 1,
+        flexBasis: 0,
+        minWidth: 0,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        overflow: "hidden",
+      }}
+    >
+      <Icon name={providerIcon[provider]} size={13} color={palette.muted} />
+      <Text numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 0 }}>
+        {cell.label}
+      </Text>
+      {cell.kind === "blocked" ? (
+        <View style={{ flex: 1, minWidth: 9, alignItems: "center" }}>
+          <Text style={{ fontSize: 10, color: palette.danger }}>▲</Text>
+        </View>
+      ) : cell.kind === "stale" ? (
+        <View style={{ flex: 1, minWidth: 9, alignItems: "center" }}>
+          <Icon name="Clock" size={11} color={palette.muted} />
+        </View>
+      ) : (
+        <MiniMeter fill={cell.fill} tone={cell.tone} />
+      )}
+      {!(cell.kind === "blocked" && cell.percent === "—") && (
+        <Text
+          numberOfLines={1}
           style={{
-            width: 24,
-            height: 4,
-            borderRadius: 2,
-            backgroundColor: palette.track,
+            fontSize: 12,
+            color,
+            flexShrink: 0,
+            fontVariant: ["tabular-nums"],
           }}
         >
-          <View
-            style={{
-              width: `${value ?? 0}%`,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: color,
-              opacity: old ? 0.4 : 1,
-            }}
-          />
-        </View>
+          {cell.percent}
+        </Text>
       )}
-      <Text
-        numberOfLines={1}
-        style={{
-          fontSize: 12,
-          color: old ? palette.muted : palette.text,
-          maxWidth: 42,
-        }}
-      >
-        {percentText(value, old, window?.inferred)}
-      </Text>
     </View>
   );
 }
@@ -146,12 +207,45 @@ function FooterContent({
   const query = useStatus(props.host.id),
     settings = useSettings(displaySettings);
   const data = query.data?.ok ? query.data.data : null;
-  const items =
-    settings.status === "ready" ? chooseItems(data, settings.values.items) : [];
+  const ready = settings.status === "ready";
+  const warning = ready ? settings.values.warning : 80,
+    danger = ready ? settings.values.danger : 100;
+  const grid = footerGrid(ready ? settings.values.items.length : 0);
+  const items = ready
+    ? chooseItems(data, settings.values.items).slice(0, grid.count)
+    : [];
   const offline = query.isError || query.data?.ok === false;
-  const line = stripLayout(
-    Math.max(0, width - 56 - (offline ? 70 : 0)),
-    items.length,
+  const mode = footerSummary({
+    settingsReady: ready,
+    itemCount: items.length,
+    offline: offline && !data,
+  });
+  const narrow = width > 0 && width <= narrowFooterWidth;
+  const cells = items.map((item) => ({
+    item,
+    cell: footerCell(item, { warning, danger, offline, narrow }),
+  }));
+  const rows = Array.from({ length: grid.rows }, (_, r) =>
+    cells.slice(r * 3, r * 3 + 3),
+  );
+  const label =
+    mode === "grid"
+      ? "SubBaton. " +
+        cells
+          .map(
+            ({ item, cell }) =>
+              `${providerLabel[item.provider]} ${cell.label}: ${cell.kind === "blocked" ? "unavailable" : cell.percent}`,
+          )
+          .join(". ") +
+        ". Open account details."
+      : "SubBaton. Open account details.";
+  const message = (icon: string, text: string, color: string) => (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 18 }}>
+      <Icon name={icon} size={13} color={color} />
+      <Text numberOfLines={1} style={{ fontSize: 12, color, flex: 1 }}>
+        {text}
+      </Text>
+    </View>
   );
   return (
     <View
@@ -168,127 +262,42 @@ function FooterContent({
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Open SubBaton subscription usage"
+        accessibilityLabel={label}
         onFocus={(event) => setFocused(keyboardFocus(event.currentTarget))}
         onBlur={() => setFocused(false)}
         onPressIn={(event) => setFocused(keyboardFocus(event.currentTarget))}
         onPress={() => props.openPopover(Details)}
         style={{
-          paddingHorizontal: 12,
-          paddingVertical: 4,
-          minHeight: 36,
+          paddingHorizontal: 14,
+          paddingVertical: 10,
           borderWidth: 1,
           borderColor: focused ? palette.focus : "transparent",
           borderRadius: 6,
+          gap: 9,
         }}
       >
-        {
-          <View
-            accessible
-            accessibilityLabel={
-              "SubBaton. " +
-              items
-                .map(
-                  (item) =>
-                    `${providerLabel[item.provider]} ${windowTitle(item.windowId, item.window?.label)}: ${percentText(item.window?.usedPercent ?? null, item.window ? stale(item.window, query.isError) : true, item.window?.inferred)}`,
-                )
-                .join(". ") +
-              ". Open account details."
-            }
-            style={{
-              flexDirection: "row",
-              flexWrap: "nowrap",
-              width: Math.max(0, width - 56),
-              overflow: "hidden",
-              alignItems: "center",
-              gap: 14,
-              paddingVertical: 4,
-              flexShrink: 1,
-            }}
-          >
-            {settings.status !== "ready" ? (
-              <Text
-                numberOfLines={1}
-                style={{ color: props.theme.colors.foregroundMuted }}
-              >
-                SubBaton settings {settings.status}
-              </Text>
-            ) : items.length === 0 ? (
-              <Text
-                numberOfLines={1}
-                style={{ color: props.theme.colors.foregroundMuted }}
-              >
-                SubBaton · choose items in settings
-              </Text>
-            ) : (
-              items.slice(0, line.count).map((item) => (
-                <View
+        {mode === "loading" ? (
+          message("Gauge", `SubBaton settings ${settings.status}`, palette.muted)
+        ) : mode === "unavailable" ? (
+          message("TriangleAlert", "SubBaton unavailable", palette.warning)
+        ) : mode === "none" ? (
+          message("Gauge", "Choose usage items…", palette.accent)
+        ) : (
+          rows.map((row, r) => (
+            <View key={r} style={{ flexDirection: "row", gap: 10 }}>
+              {row.map(({ item, cell }) => (
+                <FooterCellView
                   key={`${item.provider}:${item.windowId}`}
-                  style={{ flexDirection: "row", alignItems: "center", gap: 3 }}
-                  accessibilityLabel={`${providerLabel[item.provider]} ${windowTitle(item.windowId, item.window?.label)} ${item.account?.health ?? "unknown"}`}
-                >
-                  <Icon
-                    name={providerIcon[item.provider]}
-                    size={13}
-                    color={palette.muted}
-                  />
-                  <Text
-                    numberOfLines={1}
-                    style={{
-                      fontSize: 12,
-                      color: palette.muted,
-                      maxWidth: line.labels ? 58 : 20,
-                    }}
-                  >
-                    {line.labels
-                      ? windowTitle(item.windowId, item.window?.label)
-                      : shortWindowTitle(item.windowId, item.window?.label)}
-                  </Text>
-                  <Meter
-                    theme={props.theme}
-                    window={item.window}
-                    showBar={line.meters}
-                    warning={
-                      settings.status === "ready" ? settings.values.warning : 75
-                    }
-                    danger={
-                      settings.status === "ready" ? settings.values.danger : 90
-                    }
-                    offline={query.isError || query.data?.ok === false}
-                  />
-                  {item.account?.health !== "ok" && item.account && (
-                    <Text
-                      numberOfLines={1}
-                      style={{ color: props.theme.colors.statusWarning }}
-                    >
-                      !
-                    </Text>
-                  )}
-                </View>
-              ))
-            )}
-            {line.hidden > 0 && (
-              <Text
-                numberOfLines={1}
-                style={{
-                  color: props.theme.colors.foregroundMuted,
-                  fontSize: 10,
-                  maxWidth: 24,
-                }}
-              >
-                +{line.hidden}
-              </Text>
-            )}
-            {(query.isError || query.data?.ok === false) && (
-              <Text
-                numberOfLines={1}
-                style={{ color: props.theme.colors.statusWarning }}
-              >
-                unavailable
-              </Text>
-            )}
-          </View>
-        }
+                  provider={item.provider}
+                  cell={cell}
+                />
+              ))}
+              {Array.from({ length: 3 - row.length }, (_, i) => (
+                <View key={`pad${i}`} style={{ flex: 1, flexBasis: 0 }} />
+              ))}
+            </View>
+          ))
+        )}
       </Pressable>
     </View>
   );
@@ -300,6 +309,8 @@ function Button({
   compact = false,
   icon,
   small = false,
+  primary = false,
+  iconLabel = false,
   a11yLabel,
 }: {
   label: string;
@@ -308,6 +319,8 @@ function Button({
   compact?: boolean;
   icon?: string;
   small?: boolean;
+  primary?: boolean;
+  iconLabel?: boolean;
   a11yLabel?: string;
 }) {
   const palette = usePalette();
@@ -333,27 +346,34 @@ function Button({
         minWidth: compact ? 44 : icon ? 26 : 44,
         justifyContent: "center",
         alignItems: "center",
-        paddingHorizontal: icon ? 4 : 9,
+        paddingHorizontal: icon && !iconLabel ? 4 : 9,
         paddingVertical: compact ? 6 : 3,
         borderWidth: 1,
         borderColor: focused
           ? palette.focus
-          : icon
+          : icon && !iconLabel
             ? "transparent"
             : palette.line,
         borderRadius: 7,
         backgroundColor: hovered
           ? palette.hover
-          : icon
+          : icon && !iconLabel
             ? "transparent"
-            : palette.row,
+            : primary
+              ? palette.accent
+              : palette.row,
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      {icon ? (
+      {icon && iconLabel ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Icon name={icon} size={13} color={palette.text} />
+          <Text style={{ color: palette.text, fontSize: 12, fontWeight: "500" }}>{label}</Text>
+        </View>
+      ) : icon ? (
         <Icon name={icon} size={14} color={palette.muted} />
       ) : (
-        <Text style={{ color: palette.text, fontSize: 12, fontWeight: "500" }}>
+        <Text style={{ color: primary ? palette.onAccent : palette.text, fontSize: 12, fontWeight: "500" }}>
           {label}
         </Text>
       )}
@@ -375,7 +395,7 @@ function PaceBar({
 }) {
   const palette = usePalette();
   const view = windowPresentation(provider, window, warning, danger, offline);
-  const label = compactWindowLabel(provider, window),
+  const label = windowLabel(provider, window),
     value = window.usedPercent;
   return (
     <View style={{ marginTop: 6, gap: 3 }}>
@@ -383,7 +403,7 @@ function PaceBar({
         <Text
           numberOfLines={1}
           style={{
-            width: provider === "agy" ? 66 : 52,
+            width: 62,
             color: palette.muted,
             fontSize: 12,
           }}
@@ -453,7 +473,7 @@ function PaceBar({
           flexDirection: "row",
           alignItems: "center",
           gap: 3,
-          marginLeft: provider === "agy" ? 76 : 62,
+          marginLeft: 72,
         }}
       >
         {view.clock && <Icon name="Clock" size={11} color={palette.muted} />}
@@ -467,267 +487,378 @@ function PaceBar({
     </View>
   );
 }
-function AccountRow({
-  account,
+function Badge({ text, tone }: { text: string; tone: Tone }) {
+  const palette = usePalette();
+  const color =
+    tone === "danger" ? palette.danger : tone === "warning" ? palette.warning : tone === "normal" ? palette.ok : palette.muted;
+  return (
+    <View
+      style={{
+        borderWidth: 1,
+        borderColor: color,
+        borderRadius: 5,
+        paddingHorizontal: 5,
+      }}
+    >
+      <Text numberOfLines={1} style={{ fontSize: 11, color, lineHeight: 16 }}>
+        {text}
+      </Text>
+    </View>
+  );
+}
+function Glyph({ kind }: { kind: "ok" | "warn" | "crit" | "mute" }) {
+  const palette = usePalette();
+  if (kind === "warn" || kind === "crit")
+    return (
+      <Text style={{ width: 8, fontSize: 10, textAlign: "center", color: kind === "crit" ? palette.danger : palette.warning }}>
+        ▲
+      </Text>
+    );
+  return (
+    <View
+      style={{
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: kind === "ok" ? palette.ok : palette.faint,
+      }}
+    />
+  );
+}
+function MiniWindow({
   provider,
+  window,
+  warning,
+  danger,
+  offline,
+}: {
+  provider: Provider;
+  window: Window;
+  warning: number;
+  danger: number;
+  offline: boolean;
+}) {
+  const palette = usePalette();
+  const view = windowPresentation(provider, window, warning, danger, offline);
+  return (
+    <View
+      accessible
+      accessibilityLabel={view.accessibility}
+      style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+    >
+      <Text numberOfLines={1} style={{ fontSize: 12, color: palette.muted }}>
+        {windowLabel(provider, window)}
+      </Text>
+      <MiniMeter fill={view.fillPercent} tone={view.tone} dim={view.clock} width={46} />
+      <Text
+        style={{
+          fontSize: 12,
+          color: view.clock ? palette.muted : view.tone === "danger" ? palette.danger : view.tone === "warning" ? palette.warning : palette.text,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {view.percent}
+      </Text>
+    </View>
+  );
+}
+function Line({
+  line,
+  onAction,
+  compact,
+  disabled,
+}: {
+  line: RowLine;
+  onAction?: (action: NonNullable<RowLine["action"]>) => void;
+  compact: boolean;
+  disabled?: boolean;
+}) {
+  const palette = usePalette();
+  const color = lineColor(line.tone, palette);
+  const icon =
+    line.kind === "loading"
+      ? "Loader"
+      : line.kind === "error" || line.tone === "danger"
+        ? "TriangleAlert"
+        : line.text.startsWith("Restart")
+          ? "RefreshCw"
+          : line.text.startsWith("Automatic")
+            ? "Pause"
+            : line.action === "cancel"
+              ? "Clock"
+              : "Info";
+  return (
+    <View
+      accessibilityLiveRegion="polite"
+      style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingLeft: 31, paddingTop: 5 }}
+    >
+      <Icon name={icon} size={12} color={color} />
+      <Text style={{ fontSize: 12, color, flex: 1 }}>{line.text}</Text>
+      {line.action && onAction && (
+        <Button
+          small
+          compact={compact}
+          disabled={disabled}
+          label={line.action === "cancel" ? "Cancel" : line.action === "details" ? "Details" : "Retry"}
+          onPress={() => onAction(line.action!)}
+        />
+      )}
+    </View>
+  );
+}
+function ProviderRow({
+  provider,
+  status,
+  data,
+  error,
+  pending,
   compact,
   warning,
   danger,
   offline,
   busy,
-  onSwitch,
-  onSwitchWhenIdle,
+  open,
+  onToggle,
+  notice,
+  act,
+  onRetry,
+  handoffs,
+  restartCodexDaemon,
 }: {
-  account: Account;
   provider: Provider;
+  status: ProviderStatus | undefined;
+  data: boolean;
+  error: string | null;
+  pending: boolean;
   compact: boolean;
   warning: number;
   danger: number;
   offline: boolean;
   busy: boolean;
-  onSwitch: () => void;
-  onSwitchWhenIdle?: () => void;
+  open: boolean;
+  onToggle: () => void;
+  notice?: string;
+  act: (provider: Provider, action: () => Promise<ActionResult | { provider: Provider | null; result: ActionResult }[]>) => Promise<void>;
+  onRetry: () => void;
+  handoffs: ReturnType<typeof useHandoff>;
+  restartCodexDaemon: boolean;
 }) {
   const palette = usePalette();
-  const [open, setOpen] = useState(false),
-    [focused, setFocused] = useState(false),
-    [hovered, setHovered] = useState(false);
-  const windows = splitWindows(provider, account.windows),
-    read = lastRead(account);
-  const dot =
-    account.active || account.health !== "ok"
-      ? toneColor(accountTone(account, warning, danger), palette)
-      : palette.faint;
-  const details = [
-    ["Account", account.email ?? "Email unknown"],
-    ["Plan", account.plan ?? "Plan unknown"],
-    [
-      "Login",
-      account.loginExpiresAt !== null
-        ? new Date(account.loginExpiresAt * 1000).toLocaleDateString("en-GB", {
-            day: "numeric",
-            month: "short",
-            year: "numeric",
-          })
-        : provider === "codex"
-          ? "No fixed end date"
-          : provider === "agy"
-            ? "Renewed by agy"
-            : "Unknown",
-    ],
-    ["Last read", relativeAge(read)],
+  const switchAccount = useRpc(switchRpc),
+    strategy = useRpc(strategyRpc),
+    requestHandoff = useRpc(handoffRequestRpc),
+    controlHandoff = useRpc(handoffControlRpc);
+  const [choice, setChoice] = useState<string | null>(null),
+    [details, setDetails] = useState(false),
+    [focused, setFocused] = useState(false);
+  const accounts = status?.accounts ?? [];
+  const current = accounts.find((a) => a.active);
+  const base = providerLine({ queryError: error, pending, hasData: data, provider: status });
+  const handoff = provider === "claude" ? null : (handoffs.data?.handoffs[provider] ?? null);
+  const handoffLineRow = handoffRow(handoff);
+  const lines = [
+    ...(base ? [base] : []),
+    ...(base?.disableSwitching ? [] : autoLines(provider, status)),
   ];
-  const toggle = () => setOpen((value) => !value);
+  const locked = busy || !!base?.disableSwitching;
+  const mini = current ? miniWindows(provider, current.windows) : [];
+  const others = accounts.filter((a) => !a.active);
+  const chosen = others.find((a) => a.id === choice);
+  const read = current ? lastRead(current) : null;
+  const windowsAll = current?.windows ?? [];
+  const login =
+    current?.loginExpiresAt != null
+      ? `login valid until ${new Date(current.loginExpiresAt * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`
+      : provider === "codex"
+        ? "login has no fixed end date"
+        : provider === "agy"
+          ? "login renewed by agy"
+          : "login expiry unknown";
+  const badge = current ? accountBadge(current, warning, danger) : undefined;
+  const warnLine = current ? shortWarning(provider, current.summaryStatus, current.warnings) : null;
   return (
-    <Pressable
-      accessible={false}
-      focusable={false}
-      onPress={toggle}
+    <View
       style={{
-        padding: 10,
-        paddingHorizontal: 12,
-        marginBottom: 6,
-        borderWidth: 1,
-        borderColor: focused
-          ? palette.focus
-          : account.active
-            ? palette.ok
-            : "transparent",
-        borderRadius: 8,
-        backgroundColor: hovered ? palette.hover : palette.row,
+        paddingVertical: 7,
+        paddingLeft: 10,
+        paddingRight: 12,
+        borderTopWidth: 1,
+        borderTopColor: palette.line,
+        backgroundColor: open ? palette.sidebar : "transparent",
       }}
     >
-      <View
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${open ? "Collapse" : "Expand"} ${providerTitle(provider)}${current ? ` ${current.alias}` : ""}`}
+        accessibilityState={{ expanded: open }}
+        onPress={onToggle}
+        onFocus={(event) => setFocused(keyboardFocus(event.currentTarget))}
+        onBlur={() => setFocused(false)}
+        onPressIn={(event) => setFocused(keyboardFocus(event.currentTarget))}
         style={{
           flexDirection: "row",
           alignItems: "center",
-          gap: 8,
-          marginBottom: 2,
+          gap: 7,
+          minHeight: compact ? 44 : 24,
+          borderWidth: 1,
+          borderColor: focused ? palette.focus : "transparent",
+          borderRadius: 6,
         }}
       >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${open ? "Collapse" : "Expand"} ${account.alias} account details. ${account.active ? "In use." : ""} Health ${account.health}.`}
-          accessibilityState={{ expanded: open }}
-          onPress={(event) => {
-            event.stopPropagation();
-            toggle();
+        <Icon name={open ? "ChevronDown" : "ChevronRight"} size={14} color={palette.muted} />
+        <Glyph kind={rowGlyph(current, warning, danger)} />
+        <Text style={{ fontWeight: "600", fontSize: 13, color: palette.text }}>
+          {providerTitle(provider)}
+        </Text>
+        <Text numberOfLines={1} style={{ fontSize: 13, color: palette.muted, flexShrink: 1 }}>
+          {current?.alias ?? ""}
+        </Text>
+      </Pressable>
+      {!open && mini.length > 0 && (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 2, paddingLeft: 31, paddingTop: 5 }}>
+          {mini.map((w) => (
+            <MiniWindow key={w.id} {...{ provider, window: w, warning, danger, offline }} />
+          ))}
+        </View>
+      )}
+      {lines.map((line) => (
+        <Line key={line.text} line={line} compact={compact} disabled={busy} onAction={() => onRetry()} />
+      ))}
+      {notice && (
+        <Line line={{ kind: "warning", tone: "warning", text: notice }} compact={compact} />
+      )}
+      {handoffLineRow && (
+        <Line
+          line={handoffLineRow}
+          compact={compact}
+          disabled={busy}
+          onAction={(action) => {
+            if (action === "details") setDetails((v) => !v);
+            else if (action === "cancel" && provider !== "claude")
+              void act(provider, async () => (await controlHandoff({ provider, action: "cancel" })).result);
           }}
-          onFocus={(event) => setFocused(keyboardFocus(event.currentTarget))}
-          onBlur={() => setFocused(false)}
-          onPressIn={(event) => setFocused(keyboardFocus(event.currentTarget))}
-          onHoverIn={() => setHovered(true)}
-          onHoverOut={() => setHovered(false)}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            minHeight: compact ? 44 : 24,
-            flexDirection: "row",
-            gap: 8,
-            alignItems: "center",
-          }}
-        >
-          <View
-            style={{
-              width: 13,
-              height: 13,
-              borderRadius: 7,
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: account.active ? palette.hover : "transparent",
-              borderWidth: account.active ? 1 : 0,
-              borderColor: palette.ok,
-            }}
-          >
-            <View
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: 4,
-                backgroundColor: dot,
-              }}
-            />
-          </View>
-          <Text
-            numberOfLines={1}
-            style={{
-              color: palette.text,
-              fontWeight: "600",
-              fontSize: 13,
-              flexShrink: 1,
-            }}
-          >
-            {account.alias}
-          </Text>
-          {account.active && (
-            <Text
-              numberOfLines={1}
-              style={{ color: palette.muted, fontSize: 12 }}
-            >
-              In use
-            </Text>
-          )}
-        </Pressable>
-        {!account.active && (
-          <Button
-            label="Switch"
-            a11yLabel={`Switch to ${account.alias}`}
-            compact={compact}
-            small
-            disabled={
-              busy ||
-              !account.enabled ||
-              ["quarantined", "deviceBlocked", "needsLogin"].includes(
-                account.health,
-              )
-            }
-            onPress={onSwitch}
-          />
-        )}
-        {!account.active && onSwitchWhenIdle && (
-          <Button
-            label="When idle"
-            a11yLabel={`Switch to ${account.alias} when every Paseo ${providerLabel[provider]} agent is idle, then reopen them`}
-            compact={compact}
-            small
-            disabled={
-              busy ||
-              !account.enabled ||
-              ["quarantined", "deviceBlocked", "needsLogin"].includes(
-                account.health,
-              )
-            }
-            onPress={onSwitchWhenIdle}
-          />
-        )}
-      </View>
-      {(!account.enabled ||
-        account.health !== "ok" ||
-        account.usageStatus !== "ok") && (
-        <Text style={{ color: palette.warning, fontSize: 11 }}>
-          {!account.enabled ? "Disabled · " : ""}
-          {account.health !== "ok" ? account.health + " · " : ""}usage:{" "}
-          {account.usageStatus}
+        />
+      )}
+      {details && handoff && (
+        <Text selectable style={{ fontSize: 11, color: palette.muted, paddingLeft: 31, paddingTop: 3 }}>
+          {handoffLine(handoff)}
         </Text>
       )}
-      {shortWarning(provider, account.summaryStatus, account.warnings) && (
-        <View
-          style={{ flexDirection: "row", gap: 4, alignItems: "center" }}
-          accessibilityLabel={(account.warnings ?? []).join(". ")}
-        >
-          <Icon name="TriangleAlert" size={12} color={palette.warning} />
-          <Text
-            numberOfLines={1}
-            style={{ color: palette.warning, fontSize: 11, flex: 1 }}
-          >
-            {shortWarning(provider, account.summaryStatus, account.warnings)}
-          </Text>
-        </View>
-      )}
-      <View>
-        {windows.main.map((window) => (
-          <PaceBar
-            key={window.id}
-            {...{ provider, window, warning, danger, offline }}
-          />
-        ))}
-        {account.windows.length === 0 && (
-          <Text style={{ color: palette.muted, fontSize: 12, marginTop: 6 }}>
-            Usage unknown. No quota is assumed.
-          </Text>
-        )}
-      </View>
-      {open && (
-        <View
-          style={{
-            marginTop: 10,
-            paddingTop: 10,
-            borderTopWidth: 1,
-            borderTopColor: palette.line,
-            gap: 5,
-          }}
-        >
-          {account.warnings?.map((text, index) => (
-            <Text
-              key={`warning-${index}`}
-              style={{ fontSize: 12, color: palette.warning }}
-            >
-              {text}
+      {open && current && !base?.disableSwitching && (
+        <View style={{ paddingLeft: 31, paddingTop: 4 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            <Text selectable numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 1 }}>
+              {[current.email ?? "Email unknown", current.plan ?? "Plan unknown"].join(" · ")}
             </Text>
-          ))}
-          {details.map(([label, value]) => (
-            <View key={label} style={{ flexDirection: "row", gap: 10 }}>
-              <Text style={{ width: 86, color: palette.muted, fontSize: 12 }}>
-                {label}
-              </Text>
-              <Text
-                selectable
-                accessibilityLabel={
-                  label === "Login"
-                    ? `${value}. ${timestamp(account.loginExpiresAt)}`
-                    : label === "Last read"
-                      ? `${value}. ${timestamp(read)}`
-                      : value
-                }
-                style={{ color: palette.text, fontSize: 12, flex: 1 }}
-              >
-                {value}
-              </Text>
-            </View>
-          ))}
-          <View style={{ marginTop: windows.extra.length ? 3 : 0 }}>
-            {windows.extra.map((window) => (
-              <PaceBar
-                key={window.id}
-                {...{ provider, window, warning, danger, offline }}
-              />
-            ))}
+            {badge && <Badge {...badge} />}
           </View>
+          {windowsAll.map((w) => (
+            <PaceBar key={w.id} {...{ provider, window: w, warning, danger, offline }} />
+          ))}
+          {windowsAll.length === 0 && (
+            <Text style={{ color: palette.muted, fontSize: 12 }}>Usage unknown. No quota is assumed.</Text>
+          )}
+          {warnLine && (
+            <View style={{ flexDirection: "row", gap: 4, alignItems: "center", marginTop: 4 }} accessibilityLabel={(current.warnings ?? []).join(". ")}>
+              <Icon name="TriangleAlert" size={12} color={palette.warning} />
+              <Text style={{ color: palette.warning, fontSize: 11, flex: 1 }}>{warnLine}</Text>
+            </View>
+          )}
+          <Text style={{ fontSize: 11.5, color: palette.muted, marginTop: 4 }} accessibilityLabel={`Last read ${relativeAge(read)} (${timestamp(read)}). Login ${timestamp(current.loginExpiresAt)}`}>
+            Read {relativeAge(read)} · {login}
+          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3, marginBottom: 8 }}>
+            <View style={{ width: 1.5, height: 10, backgroundColor: palette.tick, opacity: 0.75 }} />
+            <Text style={{ fontSize: 11, color: palette.faint }}>pace: where usage would be if spread evenly until the reset</Text>
+          </View>
+          {others.length > 0 && (
+            <Text style={{ fontSize: 11, letterSpacing: 0.4, color: palette.faint, marginBottom: 4 }}>
+              OTHER ACCOUNTS
+            </Text>
+          )}
+          {others.map((account) => {
+            const b = accountBadge(account, warning, danger);
+            return (
+              <View key={account.id}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingVertical: 5, borderTopWidth: 1, borderTopColor: palette.line }}>
+                  <Glyph kind={rowGlyph(account, warning, danger)} />
+                  <Text numberOfLines={1} style={{ fontSize: 12.5, color: palette.text, flexShrink: 1 }}>{account.alias}</Text>
+                  <Text numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 1, fontVariant: ["tabular-nums"] }}>
+                    {otherAccountSummary(provider, account)}
+                  </Text>
+                  {b && <Badge {...b} />}
+                  <View style={{ flex: 1 }} />
+                  <Button
+                    small
+                    compact={compact}
+                    label="Switch…"
+                    a11yLabel={`Switch ${providerLabel[provider]} to ${account.alias}`}
+                    disabled={locked || !canSwitch(account)}
+                    onPress={() => setChoice(choice === account.id ? null : account.id)}
+                  />
+                </View>
+                {chosen?.id === account.id && (
+                  <View
+                    accessibilityRole="alert"
+                    style={{ borderWidth: 1, borderColor: palette.line, backgroundColor: palette.hover, borderRadius: 9, padding: 10, marginVertical: 4 }}
+                  >
+                    <Text style={{ fontSize: 12.5, fontWeight: "600", color: palette.text, marginBottom: 7 }}>
+                      Switch {providerLabel[provider]} to {account.alias}
+                    </Text>
+                    <View style={{ flexDirection: "row", gap: 8 }}>
+                      {switchChoices(provider).map((kind) => (
+                        <Button
+                          key={kind}
+                          primary={kind === "now"}
+                          compact={compact}
+                          disabled={locked || (kind === "idle" && handoffActive(handoff))}
+                          label={kind === "now" ? "Switch now" : "Switch when idle"}
+                          a11yLabel={
+                            kind === "now"
+                              ? `Switch ${providerLabel[provider]} to ${account.alias} now`
+                              : `Switch ${providerLabel[provider]} to ${account.alias} when every Paseo ${providerLabel[provider]} agent is idle, then reopen them`
+                          }
+                          onPress={() => {
+                            setChoice(null);
+                            if (kind === "now")
+                              void act(provider, () => switchAccount({ provider, target: account.id }));
+                            else if (provider !== "claude")
+                              void act(provider, async () => {
+                                const response = await requestHandoff({ provider, target: account.id });
+                                void handoffs.refetch();
+                                return response.result;
+                              });
+                          }}
+                        />
+                      ))}
+                    </View>
+                    {provider !== "claude" && (
+                      <Text style={{ fontSize: 11.5, color: palette.muted, marginTop: 7 }}>
+                        {idleExplanation(provider, restartCodexDaemon)}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })}
+          {others.length > 0 && provider === "claude" && (
+            <View style={{ alignSelf: "flex-start", marginTop: 8, marginBottom: 4 }}>
+              <Button
+                label="Switch to best account"
+                compact={compact}
+                disabled={locked}
+                onPress={() => void act(provider, () => strategy({ provider: "claude", strategy: "best" }))}
+              />
+            </View>
+          )}
         </View>
       )}
-    </Pressable>
+    </View>
   );
 }
+const handoffActive = (h: { phase: string } | null) =>
+  !!h && ["waiting", "switching", "reopening"].includes(h.phase);
 export function AccountPopover(
   props: PluginPopoverProps & { openSettings: () => void },
 ) {
@@ -743,44 +874,39 @@ function PopoverContent(
   const palette = usePalette();
   const { height } = useWindowDimensions();
   const query = useStatus(props.host.id),
-    switchAccount = useRpc(switchRpc),
-    strategy = useRpc(strategyRpc),
     refresh = useRpc(refreshRpc),
-    requestHandoff = useRpc(handoffRequestRpc),
     handoffs = useHandoff(props.host.id);
   const [busy, setBusy] = useState(false),
     [notices, setNotices] = useState<Partial<Record<Provider, string>>>({}),
-    [selected, setSelected] = useState<Provider>("claude"),
-    [confirmIdle, setConfirmIdle] = useState<{ provider: "codex" | "agy"; id: string; alias: string } | null>(null);
+    [open, setOpen] = useState<Partial<Record<Provider, boolean>>>({});
   const display = useSettings(displaySettings);
   const handoffPrefs = useSettings(handoffSettings);
-  const warning = display.status === "ready" ? display.values.warning : 75,
-    danger = display.status === "ready" ? display.values.danger : 90;
-  const data = query.data?.ok ? query.data.data : null,
-    provider = data?.providers.find((value) => value.provider === selected);
-  const handoffOf = (p: Provider) =>
-    p === "claude" ? null : (handoffs.data?.handoffs[p] ?? null);
+  const warning = display.status === "ready" ? display.values.warning : 80,
+    danger = display.status === "ready" ? display.values.danger : 100;
+  const data = query.data?.ok ? query.data.data : null;
+  const error =
+    query.isError || query.data?.ok === false
+      ? (query.data?.error?.message ?? "Status unavailable on this host.")
+      : null;
+  const offline = error !== null;
+  const updatedAt = Math.max(0, ...(data?.providers.map((p) => p.updatedAt ?? 0) ?? []));
   async function act(
-    action: () => Promise<
-      ActionResult | { provider: Provider | null; result: ActionResult }[]
-    >,
+    requested: Provider | null,
+    action: () => Promise<ActionResult | { provider: Provider | null; result: ActionResult }[]>,
   ) {
     if (busy) return;
-    const requested = selected;
     setBusy(true);
-    setNotices((previous) => ({ ...previous, [requested]: undefined }));
+    if (requested) setNotices((previous) => ({ ...previous, [requested]: undefined }));
     try {
       const value = await action();
-      const rows = Array.isArray(value)
-        ? value
-        : [{ provider: requested, result: value }];
-      setNotices((previous) => providerNotices(previous, rows, requested));
+      const rows = Array.isArray(value) ? value : [{ provider: requested, result: value }];
+      setNotices((previous) => providerNotices(previous, rows, requested ?? "claude"));
     } catch {
-      setNotices((previous) => ({
-        ...previous,
-        [requested]:
-          "Connection lost; inspect SubBaton state/recovery before retrying.",
-      }));
+      if (requested)
+        setNotices((previous) => ({
+          ...previous,
+          [requested]: "Connection lost; inspect SubBaton state/recovery before retrying.",
+        }));
     } finally {
       setBusy(false);
       await query.refetch();
@@ -801,315 +927,76 @@ function PopoverContent(
     >
       <View
         style={{
-          paddingTop: 12,
-          paddingBottom: 8,
-          paddingHorizontal: 14,
+          paddingTop: 11,
+          paddingBottom: 9,
+          paddingLeft: 14,
+          paddingRight: 12,
           flexDirection: "row",
           alignItems: "center",
-          justifyContent: "space-between",
-          gap: 6,
+          gap: 8,
         }}
       >
-        <View
-          accessibilityRole="tablist"
+        <Text style={{ fontWeight: "600", fontSize: 13, color: palette.text, flex: 1 }}>SubBaton</Text>
+        <Text
+          accessibilityLabel={`Updated ${relativeAge(updatedAt || null)}`}
+          numberOfLines={1}
           style={{
-            flexDirection: "row",
-            gap: 2,
-            backgroundColor: palette.sidebar,
-            padding: 3,
-            borderRadius: 8,
+            color: palette.muted,
+            opacity: updatedAt && Date.now() / 1000 - updatedAt > 180 ? 0.65 : 1,
+            fontSize: 12,
           }}
         >
-          {(["claude", "codex", "agy"] as const).map((id) => (
-            <ProviderTab
-              key={id}
-              id={id}
-              compact={props.layout.compact}
-              selected={selected === id}
-              tone={accountTone(
-                data?.providers
-                  .find((value) => value.provider === id)
-                  ?.accounts.find((account) => account.active),
-                warning,
-                danger,
-              )}
-              onPress={() => setSelected(id)}
-            />
-          ))}
-        </View>
-        <View
-          style={{
-            flexDirection: "row",
-            gap: 3,
-            alignItems: "center",
-            flex: 1,
-            minWidth: 0,
-            justifyContent: "flex-end",
-          }}
-        >
-          <Text
-            accessibilityLabel={`Updated ${relativeAge(provider?.updatedAt ?? null)}`}
-            numberOfLines={2}
-            style={{
-              color: palette.muted,
-              opacity:
-                provider?.updatedAt &&
-                Date.now() / 1000 - provider.updatedAt > 180
-                  ? 0.65
-                  : 1,
-              fontSize: 11,
-              flexShrink: 1,
-            }}
-          >
-            updated {relativeAge(provider?.updatedAt ?? null)}
-          </Text>
-          <Button
-            label={busy ? "Working…" : "Refresh now"}
-            icon="RefreshCw"
-            compact={props.layout.compact}
-            disabled={busy}
-            onPress={() => void act(async () => await refresh({}))}
-          />
-        </View>
+          updated {relativeAge(updatedAt || null)}
+        </Text>
+        <Button
+          label={busy ? "Working…" : "Refresh usage"}
+          icon="RefreshCw"
+          compact={props.layout.compact}
+          disabled={busy}
+          onPress={() => void act(null, async () => await refresh({}))}
+        />
       </View>
       <ScrollView
         style={{ maxHeight: popoverBodyHeight(props.layout.compact, height) }}
-        contentContainerStyle={{
-          paddingTop: 2,
-          paddingHorizontal: 10,
-          paddingBottom: 10,
-        }}
+        contentContainerStyle={{ paddingBottom: 4 }}
       >
-        {notices[selected] && (
-          <Text
-            numberOfLines={1}
-            accessibilityLiveRegion="polite"
-            accessibilityLabel={notices[selected]}
-            style={{ color: palette.warning, fontSize: 12, padding: 4 }}
-          >
-            {notices[selected]}
-          </Text>
-        )}
-        {handoffOf(selected) && (
-          <Text
-            accessibilityLiveRegion="polite"
-            style={{
-              color:
-                handoffTone(handoffOf(selected)!) === "warning"
-                  ? palette.warning
-                  : palette.muted,
-              fontSize: 12,
-              padding: 4,
-            }}
-          >
-            {handoffLine(handoffOf(selected)!)}
-          </Text>
-        )}
-        {(query.isError || query.data?.ok === false) && (
-          <Text style={{ color: palette.warning, fontSize: 12, padding: 4 }}>
-            {query.data?.error?.message ?? "Status unavailable on this host."}
-          </Text>
-        )}
         {data?.providers.some((value) => value.provider === "unknown") && (
-          <Text style={{ color: palette.muted, fontSize: 11 }}>
+          <Text style={{ color: palette.muted, fontSize: 11, paddingHorizontal: 14 }}>
             A newer provider is unknown; its actions are disabled.
           </Text>
         )}
-        {!data && query.isPending && (
-          <Text style={{ color: palette.muted }}>Loading cached status…</Text>
-        )}
-        {selected === "claude" && (
-          <View
-            style={{
-              flexDirection: "row",
-              gap: 8,
-              paddingHorizontal: 4,
-              paddingTop: 4,
-              paddingBottom: 10,
-            }}
-          >
-            <Button
-              label="Switch to best"
-              compact={props.layout.compact}
-              disabled={busy}
-              onPress={() =>
-                void act(() =>
-                  strategy({ provider: "claude", strategy: "best" }),
-                )
-              }
-            />
-            <Button
-              label="Next available"
-              compact={props.layout.compact}
-              disabled={busy}
-              onPress={() =>
-                void act(() =>
-                  strategy({ provider: "claude", strategy: "next-available" }),
-                )
-              }
-            />
-          </View>
-        )}
-        {provider?.cacheStatus !== "available" && (
-          <Text style={{ color: palette.warning, fontSize: 12, padding: 4 }}>
-            Snapshot {provider?.cacheStatus ?? "missing"}. Run this provider's
-            list command once with the signed CLI to populate its snapshot.
-          </Text>
-        )}
-        {provider?.cacheStatus === "available" &&
-          provider.accounts.length === 0 && (
-            <Text style={{ color: palette.muted, padding: 4 }}>
-              No saved accounts.
-            </Text>
-          )}
-        {provider?.accounts.map((account) => (
-          <AccountRow
-            key={account.id}
-            account={account}
-            provider={selected}
+        {(["claude", "codex", "agy"] as const).map((id) => (
+          <ProviderRow
+            key={id}
+            provider={id}
+            status={data?.providers.find((p) => p.provider === id) as ProviderStatus | undefined}
+            data={!!data}
+            error={error}
+            pending={query.isPending}
             compact={props.layout.compact}
-            warning={warning}
-            danger={danger}
-            offline={query.isError || query.data?.ok === false}
-            busy={busy}
-            onSwitch={() =>
-              void act(() =>
-                switchAccount({ provider: selected, target: account.id }),
-              )
-            }
-            onSwitchWhenIdle={
-              selected === "claude" || handoffActive(handoffOf(selected))
-                ? undefined
-                : () =>
-                    setConfirmIdle({
-                      provider: selected as "codex" | "agy",
-                      id: account.id,
-                      alias: account.alias,
-                    })
-            }
+            {...{ warning, danger, offline, busy }}
+            open={!!open[id]}
+            onToggle={() => setOpen((v) => ({ ...v, [id]: !v[id] }))}
+            notice={notices[id]}
+            act={act}
+            onRetry={() => void query.refetch()}
+            handoffs={handoffs}
+            restartCodexDaemon={handoffPrefs.status === "ready" && handoffPrefs.values.restartCodexDaemon}
           />
         ))}
-        {confirmIdle && confirmIdle.provider === selected && (
-          <View
-            accessibilityRole="alert"
-            style={{
-              gap: 6,
-              padding: 8,
-              borderRadius: 8,
-              borderWidth: 1,
-              borderColor: palette.line,
-            }}
-          >
-            <Text style={{ color: palette.text, fontSize: 12 }}>
-              {handoffEffect(
-                confirmIdle.provider,
-                confirmIdle.alias,
-                handoffPrefs.status === "ready" &&
-                  handoffPrefs.values.restartCodexDaemon,
-                handoffPrefs.status === "ready"
-                  ? handoffPrefs.values.idleWaitMinutes
-                  : 30,
-              )}
-            </Text>
-            <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
-              <Button
-                label="Switch when idle"
-                a11yLabel={`Confirm: switch ${providerLabel[confirmIdle.provider]} to ${confirmIdle.alias} when idle`}
-                disabled={busy}
-                onPress={() => {
-                  const chosen = confirmIdle;
-                  setConfirmIdle(null);
-                  void act(async () => {
-                    const response = await requestHandoff({
-                      provider: chosen.provider,
-                      target: chosen.id,
-                    });
-                    void handoffs.refetch();
-                    return response.result;
-                  });
-                }}
-              />
-              <Button label="Cancel" onPress={() => setConfirmIdle(null)} />
-            </View>
-          </View>
-        )}
-        {selected === "codex" && (
-          <Text style={{ color: palette.muted, fontSize: 12, padding: 6 }}>
-            Open Codex terminals keep their account until restarted. When idle
-            reloads Paseo Codex agents after the switch.
-          </Text>
-        )}
-        {selected === "agy" && (
-          <Text style={{ color: palette.muted, fontSize: 12, padding: 6 }}>
-            When idle closes idle Paseo agy agents, switches and reopens their
-            conversations. Terminal agy sessions must be finished first.
-          </Text>
-        )}
-        <View style={{ alignSelf: "flex-start", marginTop: 4 }}>
-          <Button
-            label="Settings"
-            onPress={props.openSettings}
-            compact={props.layout.compact}
-          />
-        </View>
       </ScrollView>
-    </View>
-  );
-}
-function ProviderTab({
-  id,
-  compact,
-  selected,
-  tone,
-  onPress,
-}: {
-  id: Provider;
-  compact: boolean;
-  selected: boolean;
-  tone: string;
-  onPress: () => void;
-}) {
-  const palette = usePalette();
-  const [focused, setFocused] = useState(false);
-  return (
-    <Pressable
-      accessibilityRole="tab"
-      accessibilityLabel={`${providerLabel[id]}, status ${tone}`}
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      onFocus={(event) => setFocused(keyboardFocus(event.currentTarget))}
-      onBlur={() => setFocused(false)}
-      onPressIn={(event) => setFocused(keyboardFocus(event.currentTarget))}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        minHeight: compact ? 44 : 28,
-        borderRadius: 6,
-        backgroundColor: selected ? palette.hover : "transparent",
-        borderWidth: 1,
-        borderColor: focused ? palette.focus : "transparent",
-      }}
-    >
       <View
         style={{
-          width: 6,
-          height: 6,
-          borderRadius: 3,
-          backgroundColor: toneColor(tone, palette),
-        }}
-      />
-      <Text
-        style={{
-          fontSize: 12,
-          fontWeight: "500",
-          color: selected ? palette.text : palette.muted,
+          borderTopWidth: 1,
+          borderTopColor: palette.line,
+          paddingVertical: 8,
+          paddingHorizontal: 12,
+          flexDirection: "row",
+          alignItems: "center",
         }}
       >
-        {providerLabel[id]}
-      </Text>
-    </Pressable>
+        <Button label="Settings…" icon="Settings" iconLabel compact={props.layout.compact} onPress={props.openSettings} />
+      </View>
+    </View>
   );
 }

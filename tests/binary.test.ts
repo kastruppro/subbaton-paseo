@@ -38,6 +38,7 @@ function fixture() {
   const signed: string[] = [];
   const system: BinarySystem = {
     uid: 501,
+    home: () => "/example/home",
     path: "/safe",
     async realpath(p) {
       if (!values.has(p))
@@ -166,8 +167,9 @@ test("default resolves from temporary daemon homes while saved custom paths stay
   const { defaultBinary } = await import("../shared/defaults.js");
   const home = await mkdtemp(join(tmpdir(), "subbaton-home-"));
   try {
-    process.env.HOME = home;
+    process.env.HOME = "/spoofed-home";
     const f = fixture();
+    f.system.home = () => home;
     const seen: string[] = [];
     f.system.realpath = async (path) => { seen.push(path); return "/safe/subbaton"; };
     await resolveBinary(defaultBinary, false, f.system);
@@ -179,4 +181,13 @@ test("default resolves from temporary daemon homes while saved custom paths stay
     if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous;
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test("host v2 migrates exactly the saved old default and preserves custom settings", async () => {
+  assert.equal(hostSettings.version, 2);
+  const saved = { binaryPath: "/Users/Shared/subbaton/subbaton", allowPathLookup: true };
+  const migrated = await hostSettings.migrate!(saved, 1);
+  assert.deepEqual(migrated, { ...saved, binaryPath: hostSettings.schema.parse({}).binaryPath });
+  const custom = { ...saved, binaryPath: "/custom/subbaton" };
+  assert.deepEqual(await hostSettings.migrate!(custom, 1), custom);
 });

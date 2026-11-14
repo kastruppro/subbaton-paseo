@@ -130,7 +130,13 @@ export const refreshRpc = defineRpc({
 export const hostSettings = defineSettings({
   id: "host",
   scope: "host",
-  version: 1,
+  version: 2,
+  migrate(values) {
+    if (values && typeof values === "object" && "binaryPath" in values &&
+        values.binaryPath === "/Users/Shared/subbaton/subbaton")
+      return { ...values, binaryPath: defaultBinary };
+    return values;
+  },
   schema: z.object({
     allowPathLookup: z.boolean().default(false),
     binaryPath: z.string().min(1).max(4096).default(defaultBinary),

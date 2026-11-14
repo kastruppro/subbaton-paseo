@@ -992,7 +992,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
             <SettingsRow
               key={p}
               label={providerLabel[p]}
-              hint={`1. ${loginSteps[p].signIn} 2. Run: ${bin} ${loginSteps[p].add}`}
+              hint={`1. ${loginSteps[p].signIn} 2. Run: "${bin}" ${loginSteps[p].add}`}
             />
           ))}
         </SettingsCard>

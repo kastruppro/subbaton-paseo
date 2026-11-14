@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { realpath, stat, access } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -11,6 +11,7 @@ export const codeRequirement =
   '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "5W98EXLE44" and identifier "dk.kastruppro.subbaton"';
 export interface BinarySystem {
   uid: number;
+  home(): string;
   path: string;
   realpath(path: string): Promise<string>;
   stat(path: string): Promise<{
@@ -58,6 +59,7 @@ export async function verifySignature(
 }
 const nativeSystem: BinarySystem = {
   uid: process.getuid?.() ?? -1,
+  home: () => userInfo().homedir,
   path: process.env.PATH ?? "",
   realpath,
   async stat(path) {
@@ -94,7 +96,7 @@ export async function resolveBinary(
   system: BinarySystem = nativeSystem,
 ): Promise<string> {
   const isDefault = path === defaultBinary;
-  if (isDefault) path = join(homedir(), "Library/Application Support/SubBaton/bin/subbaton");
+  if (isDefault) path = join(system.home(), "Library/Application Support/SubBaton/bin/subbaton");
   if (
     !path ||
     path.length > 4096 ||

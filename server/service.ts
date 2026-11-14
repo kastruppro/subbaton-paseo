@@ -30,6 +30,8 @@ import {
   statusSchema,
   switchInput,
   strategyInput,
+  strategyPreviewInput,
+  type StrategyPreview,
   type Status,
   type ActionResult,
   type Provider,
@@ -395,6 +397,38 @@ export class SubBatonService {
         "Quota strategies currently belong to the Claude CLI. Use a named switch for this provider.",
       );
     return this.mutation([parsed.data.strategy]);
+  }
+  /**
+   * "Switch to best account" for Codex and agy: `<provider> best --dry-run` on an explicit click.
+   * It may read usage under the CLI's own floors and backoff, so it is never called for display
+   * polling. It only names a target; the switch itself goes through the named switch or handoff.
+   */
+  async strategyPreview(input: unknown): Promise<StrategyPreview> {
+    const parsed = strategyPreviewInput.safeParse(input);
+    if (!parsed.success)
+      return { outcome: "error", message: "Choose Codex or agy." };
+    if (this.mutating)
+      return { outcome: "error", message: "Another SubBaton action is still running." };
+    this.mutating = true;
+    try {
+      const { provider } = parsed.data;
+      const response = await this.call([provider, "best", "--dry-run"], 120000);
+      if (response.error) return { outcome: "error", message: response.error.message };
+      const result = response.result as { outcome?: unknown; target?: unknown };
+      if (result.outcome === "no-candidate")
+        return { outcome: "none", message: "No eligible account right now." };
+      const account = this.knownStatus?.providers
+        .find((p) => p.provider === provider)
+        ?.accounts.find((a) => a.id === result.target);
+      if (result.outcome === "unchanged" || (result.outcome === "dryRun" && account?.active))
+        return { outcome: "unchanged", message: "The active account is the best.", ...(account ? { alias: account.alias } : {}) };
+      if (result.outcome !== "dryRun" || !account)
+        return { outcome: "error", message: "SubBaton named a target this host does not know. Refresh and try again." };
+      return { outcome: "target", message: "Best account found.", target: account.id, alias: account.alias };
+    } finally {
+      this.invalidate();
+      this.mutating = false;
+    }
   }
   async refresh(): Promise<
     { provider: Provider | null; result: ActionResult }[]

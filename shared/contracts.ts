@@ -140,6 +140,23 @@ export const strategyRpc = defineRpc({
   input: strategyInput,
   output: actionSchema,
 });
+/** Explicit click only: a CLI dry run names the target of "Switch to best account" (Codex, agy). */
+export const strategyPreviewInput = z.object({
+  provider: z.enum(["codex", "agy"]),
+  strategy: z.literal("best"),
+});
+export const strategyPreviewResult = z.object({
+  outcome: z.enum(["target", "unchanged", "none", "error"]),
+  message: text,
+  target: z.uuid().optional(),
+  alias: text.optional(),
+});
+export type StrategyPreview = z.infer<typeof strategyPreviewResult>;
+export const strategyPreviewRpc = defineRpc({
+  name: "strategy.preview",
+  input: strategyPreviewInput,
+  output: strategyPreviewResult,
+});
 export const refreshRpc = defineRpc({
   name: "refresh",
   input: z.object({}),

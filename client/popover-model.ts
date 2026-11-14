@@ -4,6 +4,7 @@ import type {
   ProviderStatus,
   Window,
 } from "../shared/contracts.js";
+import type { StrategyPreview } from "../shared/contracts.js";
 import type { Handoff } from "../shared/handoff.js";
 import { activePhases } from "../shared/handoff.js";
 import { accountTone, percentText, providerLabel, severity } from "./display.js";
@@ -177,4 +178,22 @@ export function autoLines(
   if (provider === "codex" && status?.daemonRestartPending === true)
     lines.push({ kind: "warning", tone: "warning", text: "Restart pending, waits for idle" });
   return lines;
+}
+
+/** "Switch to best account" appears once per expanded provider that has another account. */
+export const showBestSwitch = (_provider: Provider, otherAccounts: number) =>
+  otherAccounts > 0;
+export function bestPreviewLine(
+  r: Pick<StrategyPreview, "outcome" | "message"> & { alias?: string },
+): RowLine | null {
+  if (r.outcome === "target") return null;
+  if (r.outcome === "unchanged")
+    return {
+      kind: "info",
+      tone: "muted",
+      text: r.alias ? `${r.alias} is already the best account.` : "The active account is already the best.",
+    };
+  if (r.outcome === "none")
+    return { kind: "info", tone: "muted", text: "No account is eligible right now." };
+  return { kind: "error", tone: "danger", text: r.message };
 }

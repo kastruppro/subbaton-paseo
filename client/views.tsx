@@ -17,6 +17,7 @@ import {
   displaySettings,
   switchRpc,
   strategyRpc,
+  strategyPreviewRpc,
   refreshRpc,
   type ActionResult,
   type Window,
@@ -55,6 +56,8 @@ import {
   otherAccountSummary,
   providerLine,
   rowGlyph,
+  bestPreviewLine,
+  showBestSwitch,
   switchChoices,
   windowLabel,
   type RowLine,
@@ -355,7 +358,7 @@ function Button({
             ? "transparent"
             : palette.line,
         borderRadius: 7,
-        backgroundColor: hovered
+        backgroundColor: hovered && !primary
           ? palette.hover
           : icon && !iconLabel
             ? "transparent"
@@ -646,12 +649,31 @@ function ProviderRow({
   const palette = usePalette();
   const switchAccount = useRpc(switchRpc),
     strategy = useRpc(strategyRpc),
+    previewBest = useRpc(strategyPreviewRpc),
     requestHandoff = useRpc(handoffRequestRpc),
     controlHandoff = useRpc(handoffControlRpc);
   const [choice, setChoice] = useState<string | null>(null),
     [details, setDetails] = useState(false),
+    [bestNote, setBestNote] = useState<RowLine | null>(null),
+    [previewing, setPreviewing] = useState(false),
     [focused, setFocused] = useState(false);
   const accounts = status?.accounts ?? [];
+  async function switchToBest() {
+    if (provider === "claude")
+      return void act(provider, () => strategy({ provider: "claude", strategy: "best" }));
+    setBestNote(null);
+    setChoice(null);
+    setPreviewing(true);
+    try {
+      const r = await previewBest({ provider, strategy: "best" });
+      if (r.outcome === "target" && r.target) setChoice(r.target);
+      else setBestNote(bestPreviewLine(r));
+    } catch {
+      setBestNote({ kind: "error", tone: "danger", text: "Connection lost; try again." });
+    } finally {
+      setPreviewing(false);
+    }
+  }
   const current = accounts.find((a) => a.active);
   const base = providerLine({ queryError: error, pending, hasData: data, provider: status });
   const handoff = provider === "claude" ? null : (handoffs.data?.handoffs[provider] ?? null);
@@ -842,14 +864,17 @@ function ProviderRow({
               </View>
             );
           })}
-          {others.length > 0 && provider === "claude" && (
-            <View style={{ alignSelf: "flex-start", marginTop: 8, marginBottom: 4 }}>
-              <Button
-                label="Switch to best account"
-                compact={compact}
-                disabled={locked}
-                onPress={() => void act(provider, () => strategy({ provider: "claude", strategy: "best" }))}
-              />
+          {showBestSwitch(provider, others.length) && (
+            <View style={{ marginTop: 8, marginBottom: 4, gap: 4 }}>
+              <View style={{ alignSelf: "flex-start" }}>
+                <Button
+                  label={previewing ? "Checking…" : "Switch to best account"}
+                  compact={compact}
+                  disabled={locked || previewing}
+                  onPress={() => void switchToBest()}
+                />
+              </View>
+              {bestNote && <Text accessibilityLiveRegion="polite" style={{ fontSize: 12, color: lineColor(bestNote.tone, palette) }}>{bestNote.text}</Text>}
             </View>
           )}
         </View>

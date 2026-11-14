@@ -137,3 +137,82 @@ test("switch rejects flag/control injection without spawning", async () => {
     );
   assert.equal(cli.calls.length, 0);
 });
+
+// Switch to best account for Codex and agy: an explicit dry run names the target (UI v2).
+const codexA = "22222222-2222-4222-8222-222222222222";
+const codexB = "33333333-3333-4333-8333-333333333333";
+const codexStatus = {
+  cacheOnly: true,
+  generatedAt: 20,
+  providers: [
+    {
+      provider: "codex",
+      cacheStatus: "available",
+      updatedAt: 20,
+      accounts: [codexA, codexB].map((id, i) => ({
+        id, alias: i ? "Solo" : "Team", email: null, active: i === 0, enabled: true, health: "ok",
+        plan: null, loginExpiresAt: null, usageStatus: "ok", windows: [],
+      })),
+    },
+  ],
+};
+const reply = (result: unknown, code = 0) => ({
+  code,
+  stdout: JSON.stringify({ schemaVersion: 1, ok: code === 0, result }),
+});
+async function previewSetup(result: unknown, code = 0) {
+  const ctx = setup();
+  ctx.cli.response = reply(codexStatus);
+  await ctx.service.status();
+  ctx.cli.response = reply(result, code);
+  return ctx;
+}
+test("best preview runs '<provider> best --dry-run --json' and names a different known target", async () => {
+  const { cli, service } = await previewSetup({ outcome: "dryRun", target: codexB, alias: "ignored" });
+  const r = await service.strategyPreview({ provider: "codex", strategy: "best" });
+  assert.deepEqual(cli.calls.at(-1)?.argv, ["codex", "best", "--dry-run", "--json"]);
+  assert.equal(r.outcome, "target");
+  assert.equal(r.target, codexB);
+  assert.equal(r.alias, "Solo");
+});
+test("best preview reports the active account kept, or no candidate, in one line", async () => {
+  let ctx = await previewSetup({ outcome: "unchanged", target: codexA });
+  let r = await ctx.service.strategyPreview({ provider: "codex", strategy: "best" });
+  assert.equal(r.outcome, "unchanged");
+  ctx = await previewSetup({ outcome: "no-candidate" });
+  r = await ctx.service.strategyPreview({ provider: "codex", strategy: "best" });
+  assert.equal(r.outcome, "none");
+  ctx = await previewSetup({ outcome: "dryRun", target: codexA });
+  r = await ctx.service.strategyPreview({ provider: "codex", strategy: "best" });
+  assert.equal(r.outcome, "unchanged");
+});
+test("best preview never trusts an unknown target and never runs for Claude or bad input", async () => {
+  const { cli, service } = await previewSetup({ outcome: "dryRun", target: "44444444-4444-4444-8444-444444444444" });
+  const r = await service.strategyPreview({ provider: "codex", strategy: "best" });
+  assert.equal(r.outcome, "error");
+  assert.equal(r.target, undefined);
+  const before = cli.calls.length;
+  assert.equal((await service.strategyPreview({ provider: "claude", strategy: "best" } as never)).outcome, "error");
+  assert.equal((await service.strategyPreview({ provider: "agy", strategy: "rotate" } as never)).outcome, "error");
+  assert.equal(cli.calls.length, before);
+});
+test("best preview surfaces CLI refusals and does not switch", async () => {
+  const ctx = setup();
+  ctx.cli.response = reply(codexStatus);
+  await ctx.service.status();
+  ctx.cli.response = { code: 1, stdout: JSON.stringify({ schemaVersion: 1, ok: false, error: { code: "recoveryRequired", message: "x" } }) };
+  const r = await ctx.service.strategyPreview({ provider: "codex", strategy: "best" });
+  assert.equal(r.outcome, "error");
+  assert.ok(ctx.cli.calls.every((c) => !c.argv.includes("switch")));
+});
+test("best preview works for agy when the status knows the account", async () => {
+  const ctx = setup();
+  const agy = structuredClone(codexStatus) as any;
+  agy.providers[0].provider = "agy";
+  ctx.cli.response = reply(agy);
+  await ctx.service.status();
+  ctx.cli.response = reply({ outcome: "dryRun", target: codexB, canSwitch: false, wouldStop: false });
+  const r = await ctx.service.strategyPreview({ provider: "agy", strategy: "best" });
+  assert.deepEqual(ctx.cli.calls.at(-1)?.argv, ["agy", "best", "--dry-run", "--json"]);
+  assert.equal(r.outcome, "target");
+});

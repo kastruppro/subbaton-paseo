@@ -5,6 +5,7 @@ import {
   statusRpc,
   switchRpc,
   strategyRpc,
+  strategyPreviewRpc,
   refreshRpc,
 } from "./shared/contracts.js";
 import {
@@ -41,6 +42,7 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(switchRpc, (input) => service.switch(input));
   server.handle(strategyRpc, (input) => service.strategy(input));
+  server.handle(strategyPreviewRpc, (input) => service.strategyPreview(input));
   server.handle(refreshRpc, () => service.refresh());
   server.handle(settingsGetRpc, (input) => service.settings(input));
   server.handle(settingsSetRpc, (input) => service.settingsSet(input));

@@ -20,6 +20,8 @@ import {
   providerLine,
   autoLines,
   switchChoices,
+  bestPreviewLine,
+  showBestSwitch,
 } from "../client/popover-model.js";
 
 const win = (id: string, patch: Partial<Window> = {}): Window => ({
@@ -219,4 +221,15 @@ test("paused and restart pending only appear when the CLI reports them", () => {
   const lines = autoLines("codex", { auto: { enabled: true, paused: true, pauseReason: "flapping" }, daemonRestartPending: true } as any);
   assert.deepEqual(lines.map((l) => l.text), ["Automatic switching paused (flapping)", "Restart pending, waits for idle"]);
   assert.deepEqual(autoLines("claude", { auto: { enabled: true, paused: true }, daemonRestartPending: true } as any).map((l) => l.text), ["Automatic switching paused"]);
+});
+
+test("best preview wording and availability", () => {
+  assert.equal(showBestSwitch("claude", 2), true);
+  assert.equal(showBestSwitch("codex", 2), true);
+  assert.equal(showBestSwitch("agy", 0), false);
+  assert.equal(bestPreviewLine({ outcome: "unchanged", alias: "Team", message: "" })?.text, "Team is already the best account.");
+  assert.equal(bestPreviewLine({ outcome: "unchanged", message: "" })?.text, "The active account is already the best.");
+  assert.equal(bestPreviewLine({ outcome: "none", message: "" })?.text, "No account is eligible right now.");
+  assert.equal(bestPreviewLine({ outcome: "error", message: "Busy." })?.text, "Busy.");
+  assert.equal(bestPreviewLine({ outcome: "target", message: "" }), null);
 });

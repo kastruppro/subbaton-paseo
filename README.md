@@ -1,8 +1,46 @@
 # SubBaton for Paseo
 
-A compact subscription-usage footer, account popover, manual CLI actions and a full SubBaton settings screen (every CLI setting, poller, events and the automatic plan) for Claude, Codex and agy. React Native client surfaces support desktop/mobile; the server uses a bounded execFile bridge and a 15-second cache of `subbaton status --json`.
+> [!WARNING]
+> **Early alpha.** This plugin is experimental and changes often. Settings, commands and the JSON contract with the SubBaton CLI may break between versions. It switches the logins of your coding-agent subscriptions, so read [docs/install.md](docs/install.md) before you use it, and don't rely on it for anything important yet.
 
-Owner setup: [docs/install.md](docs/install.md). Disposable-user gates: [docs/live-tests-plugin.md](docs/live-tests-plugin.md). Scope and SDK decisions: [docs/decisions.md](docs/decisions.md).
+A [Paseo](https://paseo.sh) plugin for the SubBaton account switcher. It shows subscription usage for Claude Code, Codex and Antigravity (agy) in Paseo's sidebar, and lets you switch accounts and manage SubBaton's settings from any Paseo client.
+
+## What it does
+
+- **Usage footer:** selected quota windows of the active accounts, with warning and danger colours. Tap it for all saved accounts, reset times and login expiry.
+- **Switching:** named switches for Claude, Codex and agy; best/next-available strategies for Claude.
+- **"When idle" handoff:** for Codex and agy, waits until every Paseo agent of that provider is idle, lets the CLI switch, and reopens the agents with `agent.reload()` so they continue under the new login.
+- **Reload after every verified Codex switch:** also when you switch in the SubBaton menu bar app, in a terminal, or when the background poller switches automatically. Only idle agents are reloaded; terminal Codex sessions are never killed.
+- **Settings screen:** every SubBaton CLI setting, the background poller, events and the automatic plan.
+
+## Requirements
+
+- macOS with the **SubBaton app**, which installs and updates the signed `subbaton` CLI. The app is not publicly released yet.
+- Paseo 0.15.3 or newer on the daemon and clients.
+
+## How it works
+
+The plugin holds no credentials and makes no network calls to model providers. It runs the local `subbaton` CLI with fixed argument lists and reads its JSON output. Status is cached for 15 seconds.
+
+Before every run it checks the CLI binary:
+
+- the canonical path, and that the file and every parent directory are owned by root or the current user, with no group or world write;
+- the Developer ID team and code signing identifier.
+
+PATH lookup is off by default. Switches accept only account IDs from the last status. An uncertain or failed mutation is shown as such and must be inspected before you retry.
+
+The default CLI path is `$HOME/Library/Application Support/SubBaton/bin/subbaton`, resolved from the daemon user's account, not from `HOME`.
+
+## Install and update
+
+See [docs/install.md](docs/install.md). In short:
+
+```sh
+paseo plugin install https://github.com/kastruppro/subbaton-paseo.git --id subbaton
+paseo plugin update subbaton
+```
+
+## Development
 
 ```sh
 npm ci --ignore-scripts --legacy-peer-deps
@@ -11,31 +49,4 @@ npm run typecheck
 npm run build
 ```
 
-Tests use a fake CLI. Build checks separate browser-safe client and Node server bundles; Paseo loads the TypeScript entries. No provider HTTP client, credential storage, telemetry or agent reload is implemented here. Future coordinated handoff must call agent.reload(); agent.refresh() is read-only.
-
-
-Before every actual CLI run the plugin checks canonical ownership/permissions of the binary and all parents, then its Developer ID/team/identifier. PATH lookup is explicit opt-in, off by default. Abnormal mutations require recovery inspection; status/configuration failures have a short negative cache. Named switches accept known UUIDs only. Unknown schema additions remain visible as unknown/read-only. The footer stays on one measured line; SDK 0.15.3 still requires host-scoped preferences.
-
-Phase 6b settings: the "SubBaton settings" screen renders every field from `subbaton settings get --json` metadata and sends one provider batch per Apply through `settings set --json-input -` (stdin, expected revision required). Release/resume actions, poller install/uninstall, events and `auto plan` use fixed allowlisted argv. See docs/decisions.md.
-
-Phase 6b handoff: "When idle" (Codex/agy) waits until every Paseo agent of that provider is idle, lets the CLI switch (agy with `--stop-agy`), requires a verified result and reopens the affected agents with `agent.reload()`. Codex agents are also reloaded after automatic switches. See docs/decisions.md.
-
-
-
-## Extra trusted Codex executable owners (owner decision, 2026-11-13)
-
-The Codex settings tab renders the CLI’s `trustedExecutableOwners` array as a comma-separated local-account field. The default is empty; list at most eight distinct existing local user names (for example a dedicated Homebrew service account). The CLI resolves names and refuses unknown names with `invalidTrustedExecutableOwners`, shown inline while retaining the draft. The host validates shape and bounds before calling the CLI; it never resolves Mac accounts on the phone or relay. This setting is Codex-only and bumps the revision.
-
-Automatic restarts require the executable, any Node interpreter and every parent directory to be owned by the current user, root or one of the listed users, with no group/world write. Group membership never grants trust. Names that no longer resolve grant no UID at runtime. The CLI rechecks ownership immediately before launch; idle/coordinator guards are unchanged.
-
-
-## 0.8.1 — reload after every verified Codex switch
-
-The host setting now covers verified switches from the menu bar app, terminal CLI and poller. Its storage key `reloadCodexAfterAutomaticSwitch` stays unchanged for compatibility; the label/help describe every verified switch. The coordinator consumes Codex `switched` and `automaticSwitch` events, ignores history before its first start and uses the existing reload-only handoff. Running turns wait; agent inventory is reread before each reload. Daemon restart remains a separate default-off setting and terminal Codex is never killed.
-
-Switch transaction IDs flow from the CLI response into a bounded persisted handled-switch set (200 entries); event IDs are the fallback key. A plugin-owned When idle transaction is recorded before proceeding with reload, so its later event does not trigger a second reload. Multiple switch events observed together coalesce into one adoption of the latest native login. Failed, uncertain, dry-run and unchanged results never trigger the manual-switch event. The new `switched` event is coordination metadata and is not gated by native-notification preferences. Desktop/phone/relay live UI adoption remains an owner gate.
-
-
-The coordinator keeps its first-start event boundary and rereads the CLI’s bounded log with `events --since` rather than advancing to the newest timestamp. Persisted transaction/event identities suppress replay, so delayed writes and equal timestamps remain eligible. Existing state files keep their stored boundary. Dedupe keys exceeding the 512-character saved-schema bound are SHA-256 encoded consistently before lookup and save; a long CLI identifier cannot invalidate the state file. Events evicted from the CLI’s bounded log before a successful poll cannot be recovered.
-
-The default CLI is `$HOME/Library/Application Support/SubBaton/bin/subbaton`, resolved from the daemon user’s home. Install it through the app’s **Settings > Background > Install**; the app keeps it updated. The exact old default `/Users/Shared/subbaton/subbaton` migrates to this default; other saved custom paths remain unchanged. The sticky `/Users/Shared` ancestor exception remains for legacy custom installations.
+Tests use a fake CLI. Paseo compiles the TypeScript entries itself; `npm run build` only checks that the browser-safe client and the Node server bundles build.

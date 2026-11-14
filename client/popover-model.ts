@@ -7,7 +7,7 @@ import type {
 import type { StrategyPreview } from "../shared/contracts.js";
 import type { Handoff } from "../shared/handoff.js";
 import { activePhases } from "../shared/handoff.js";
-import { accountTone, percentText, providerLabel, severity } from "./display.js";
+import { accountTone, providerLabel, severity, windowPresentation } from "./display.js";
 
 const groupName = (id: string) =>
   id.startsWith("gemini:") ? "Gemini" : id.startsWith("claude-gpt:") ? "C/GPT" : "";
@@ -87,15 +87,20 @@ export function rowGlyph(
   const tone = accountTone(account, warning, danger);
   return tone === "normal" ? "ok" : tone === "warning" ? "warn" : tone === "danger" ? "crit" : "mute";
 }
-export function otherAccountSummary(provider: Provider, account: Account): string {
-  const main = miniWindows(provider, account.windows).filter(
-    (w) => w.usedPercent !== null,
-  );
-  return main
-    .map(
-      (w) =>
-        `${windowLabel(provider, w)} ${percentText(w.usedPercent, false, w.inferred)}`,
-    )
+export function otherAccountSummary(
+  provider: Provider,
+  account: Account,
+  opts: { offline?: boolean; now?: number } = {},
+): string {
+  const now = opts.now ?? Date.now() / 1000;
+  return miniWindows(provider, account.windows)
+    .filter((w) => w.usedPercent !== null)
+    .map((w) => {
+      const view = windowPresentation(provider, w, 100, 100, opts.offline ?? false, now);
+      const percent =
+        view.clock && view.percent !== "—" && !w.inferred ? `~${view.percent}` : view.percent;
+      return `${windowLabel(provider, w)} ${percent}`;
+    })
     .join(" · ");
 }
 export const switchChoices = (provider: Provider): ("now" | "idle")[] =>
@@ -196,4 +201,23 @@ export function bestPreviewLine(
   if (r.outcome === "none")
     return { kind: "info", tone: "muted", text: "No account is eligible right now." };
   return { kind: "error", tone: "danger", text: r.message };
+}
+
+/** What an expanded provider row shows; saved accounts never depend on an active account. */
+export function expandedSections(
+  provider: Provider,
+  accounts: Account[],
+  switchingDisabled: boolean,
+) {
+  const hasActive = accounts.some((a) => a.active);
+  const others = switchingDisabled ? [] : accounts.filter((a) => !a.active);
+  return {
+    activeDetails: hasActive && !switchingDisabled,
+    noActiveNote:
+      !hasActive && accounts.length > 0 && !switchingDisabled
+        ? "No active account. Choose one to switch to."
+        : null,
+    others,
+    best: showBestSwitch(provider, others.length),
+  };
 }

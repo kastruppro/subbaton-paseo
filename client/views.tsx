@@ -57,7 +57,7 @@ import {
   providerLine,
   rowGlyph,
   bestPreviewLine,
-  showBestSwitch,
+  expandedSections,
   switchChoices,
   windowLabel,
   type RowLine,
@@ -684,7 +684,8 @@ function ProviderRow({
   ];
   const locked = busy || !!base?.disableSwitching;
   const mini = current ? miniWindows(provider, current.windows) : [];
-  const others = accounts.filter((a) => !a.active);
+  const sections = expandedSections(provider, accounts, !!base?.disableSwitching);
+  const others = sections.others;
   const chosen = others.find((a) => a.id === choice);
   const read = current ? lastRead(current) : null;
   const windowsAll = current?.windows ?? [];
@@ -766,8 +767,14 @@ function ProviderRow({
           {handoffLine(handoff)}
         </Text>
       )}
-      {open && current && !base?.disableSwitching && (
+      {open && sections.noActiveNote && (
+        <Text style={{ fontSize: 12, color: palette.muted, paddingLeft: 31, paddingTop: 5 }}>
+          {sections.noActiveNote}
+        </Text>
+      )}
+      {open && (current || others.length > 0) && !base?.disableSwitching && (
         <View style={{ paddingLeft: 31, paddingTop: 4 }}>
+          {current && (<>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
             <Text selectable numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 1 }}>
               {[current.email ?? "Email unknown", current.plan ?? "Plan unknown"].join(" · ")}
@@ -793,6 +800,7 @@ function ProviderRow({
             <View style={{ width: 1.5, height: 10, backgroundColor: palette.tick, opacity: 0.75 }} />
             <Text style={{ fontSize: 11, color: palette.faint }}>pace: where usage would be if spread evenly until the reset</Text>
           </View>
+          </>)}
           {others.length > 0 && (
             <Text style={{ fontSize: 11, letterSpacing: 0.4, color: palette.faint, marginBottom: 4 }}>
               OTHER ACCOUNTS
@@ -806,7 +814,7 @@ function ProviderRow({
                   <Glyph kind={rowGlyph(account, warning, danger)} />
                   <Text numberOfLines={1} style={{ fontSize: 12.5, color: palette.text, flexShrink: 1 }}>{account.alias}</Text>
                   <Text numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 1, fontVariant: ["tabular-nums"] }}>
-                    {otherAccountSummary(provider, account)}
+                    {otherAccountSummary(provider, account, { offline })}
                   </Text>
                   {b && <Badge {...b} />}
                   <View style={{ flex: 1 }} />
@@ -864,7 +872,7 @@ function ProviderRow({
               </View>
             );
           })}
-          {showBestSwitch(provider, others.length) && (
+          {sections.best && (
             <View style={{ marginTop: 8, marginBottom: 4, gap: 4 }}>
               <View style={{ alignSelf: "flex-start" }}>
                 <Button

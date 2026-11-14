@@ -22,6 +22,7 @@ import {
   switchChoices,
   bestPreviewLine,
   showBestSwitch,
+  expandedSections,
 } from "../client/popover-model.js";
 
 const win = (id: string, patch: Partial<Window> = {}): Window => ({
@@ -168,7 +169,7 @@ test("row glyph rates the worst window", () => {
 });
 
 test("other account line shows worst windows", () => {
-  const a = acct({ active: false, windows: [win("five_hour", { usedPercent: 92 }), win("seven_day", { usedPercent: 77 })] });
+  const a = acct({ active: false, windows: [win("five_hour", { usedPercent: 92, resetsAt: null }), win("seven_day", { usedPercent: 77, resetsAt: null })] });
   assert.equal(otherAccountSummary("claude", a), "5h 92% · 7d 77%");
   assert.equal(otherAccountSummary("claude", acct({ windows: [] })), "");
 });
@@ -232,4 +233,36 @@ test("best preview wording and availability", () => {
   assert.equal(bestPreviewLine({ outcome: "none", message: "" })?.text, "No account is eligible right now.");
   assert.equal(bestPreviewLine({ outcome: "error", message: "Busy." })?.text, "Busy.");
   assert.equal(bestPreviewLine({ outcome: "target", message: "" }), null);
+});
+
+test("PC1: expanded row lists every saved account even with no active account", () => {
+  const a = acct({ id: "a", alias: "One", active: false });
+  const b = acct({ id: "b", alias: "Two", active: false, health: "quarantined" });
+  const none = expandedSections("codex", [a, b], false);
+  assert.equal(none.activeDetails, false);
+  assert.equal(none.noActiveNote, "No active account. Choose one to switch to.");
+  assert.deepEqual(none.others.map((x) => x.id), ["a", "b"]);
+  assert.equal(none.best, true);
+  const withActive = expandedSections("codex", [acct({ id: "c", active: true }), a], false);
+  assert.equal(withActive.activeDetails, true);
+  assert.equal(withActive.noActiveNote, null);
+  assert.deepEqual(withActive.others.map((x) => x.id), ["a"]);
+  assert.equal(expandedSections("claude", [acct({ active: true })], false).best, false);
+  const locked = expandedSections("codex", [a], true);
+  assert.equal(locked.others.length, 0);
+  assert.equal(locked.best, false);
+  assert.equal(expandedSections("codex", [], false).noActiveNote, null);
+});
+
+test("PC2: other-account summary marks stale, passed-reset and estimated readings", () => {
+  const sum = (windows: Window[], offline = false) =>
+    otherAccountSummary("claude", acct({ active: false, windows }), { now: 50, offline });
+  assert.equal(sum([win("five_hour", { usedPercent: 92, resetsAt: 1000, stale: true })]), "5h ~92%");
+  assert.equal(sum([win("five_hour", { usedPercent: 92, resetsAt: 1000 })], true), "5h ~92%");
+  assert.equal(sum([win("five_hour", { usedPercent: 92, resetsAt: 10 })]), "5h —");
+  assert.equal(sum([win("five_hour", { usedPercent: 0, resetsAt: 10, inferred: true })]), "5h ≈0%");
+  assert.equal(
+    sum([win("five_hour", { usedPercent: 92, resetsAt: 1000 }), win("seven_day", { usedPercent: 77, resetsAt: 10 })]),
+    "5h 92% · 7d —",
+  );
 });

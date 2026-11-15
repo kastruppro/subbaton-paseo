@@ -41,8 +41,18 @@ import {
 } from "../shared/contracts.js";
 /** One result per provider: success when every account was read, otherwise the worst outcome with a short list of the accounts that were not. */
 function summarizeRefresh(outcomes: { alias: string; result: ActionResult }[]): ActionResult {
-  const bad = outcomes.filter((o) => o.result.outcome !== "success");
-  if (bad.length === 0) return outcomes[0]!.result;
+  // Expected states of inactive accounts (an expired access token, an agy login that needs renewal) are "read, nothing new".
+  const expected = new Set(["accessExpired", "needsRenewal"]);
+  const info = outcomes.filter((o) => o.result.outcome === "unchanged" && expected.has(o.result.code));
+  const bad = outcomes.filter((o) => o.result.outcome !== "success" && !info.includes(o));
+  if (bad.length === 0)
+    return info.length === 0
+      ? outcomes[0]!.result
+      : {
+          outcome: "success",
+          code: "usageRead",
+          message: `Read ${outcomes.length - info.length} of ${outcomes.length} accounts; nothing new for ${info.slice(0, 3).map((o) => o.alias).join(", ")} (login needs the official client).`.replace(/Read (\d+) of \d+ accounts/, "Read $1 accounts"),
+        };
   const rank = { error: 3, uncertain: 2, unchanged: 1, success: 0 } as const;
   const worst = bad.reduce((a, b) => (rank[b.result.outcome] > rank[a.result.outcome] ? b : a));
   const list = bad.slice(0, 3).map((o) => `${o.alias}: ${o.result.message.replace(/\.$/, "")}`).join("; ");
@@ -118,6 +128,8 @@ export class SubBatonService {
   private knownStatus: Status | null = null;
   private generation = 0;
   private mutating = false;
+  /** Held for a whole refresh-all so a second click answers one busy reply instead of N failed reads. */
+  private refreshing = false;
   constructor(
     private cli: CliExecutor,
     private binary: () => Promise<string>,
@@ -309,7 +321,8 @@ export class SubBatonService {
     this.mutating = true;
     this.invalidate();
     try {
-      const response = await this.call(argv, 120000, true);
+      // A usage read changes no login: a timeout is a read-only uncertainty, not a credential recovery.
+      const response = await this.call(argv, 120000, true, argv.includes("usage") ? { kind: "read" } : {});
       if (response.error) return response.error;
       if (argv.includes("usage")) {
         const status = (response.result as { status?: unknown } | null)?.status;
@@ -336,6 +349,12 @@ export class SubBatonService {
             code: "unverifiedUsage",
             message:
               "The usage reading could not be attributed safely. It was not trusted.",
+          };
+        if (status === "needs-renewal")
+          return {
+            outcome: "unchanged",
+            code: "needsRenewal",
+            message: "This account needs renewal in the official client before its usage can be read.",
           };
         if (status !== "ok")
           return {
@@ -464,7 +483,7 @@ export class SubBatonService {
   async refreshAccount(input: unknown): Promise<ActionResult> {
     const parsed = refreshAccountInput.safeParse(input);
     if (!parsed.success) return failure("invalidInput", "Choose a provider and a saved account.");
-    if (this.mutating) return failure("busy", "Another SubBaton action is running.");
+    if (this.mutating || this.refreshing) return failure("busy", "Another SubBaton action is running.");
     const current = await this.status();
     const account = current.data?.providers.find((p) => p.provider === parsed.data.provider)?.accounts.find((a) => a.id === parsed.data.account);
     if (!account || !account.enabled) return failure("unknownAccount", "Reload status and choose a known, enabled account.");
@@ -475,13 +494,21 @@ export class SubBatonService {
   async refresh(): Promise<
     { provider: Provider | null; result: ActionResult }[]
   > {
-    if (this.mutating)
+    if (this.mutating || this.refreshing)
       return [
         {
           provider: null,
           result: failure("busy", "Another SubBaton action is running."),
         },
       ];
+    this.refreshing = true;
+    try {
+      return await this.refreshAll();
+    } finally {
+      this.refreshing = false;
+    }
+  }
+  private async refreshAll(): Promise<{ provider: Provider | null; result: ActionResult }[]> {
     const current = await this.status();
     if (!current.ok || !current.data)
       return [{ provider: null, result: current.error! }];

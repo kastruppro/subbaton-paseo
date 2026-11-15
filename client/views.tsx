@@ -837,7 +837,7 @@ function ProviderRow({
                   </Text>
                   {b && <Badge {...b} />}
                   <View style={{ flex: 1 }} />
-                  <Button
+                  {account.enabled && <Button
                     small
                     compact={compact}
                     icon="RefreshCw"
@@ -845,7 +845,7 @@ function ProviderRow({
                     a11yLabel={`Refresh usage of ${account.alias}`}
                     disabled={busy || offline}
                     onPress={() => void act(provider, () => refreshAccount({ provider, account: account.id }))}
-                  />
+                  />}
                   <Button
                     small
                     compact={compact}

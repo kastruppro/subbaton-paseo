@@ -266,3 +266,46 @@ test("the per-account refresh sends the right argv and refuses unknown, disabled
     assert.equal((await service.refreshAccount(input)).outcome, "error", JSON.stringify(input));
   assert.equal(usageCalls(cli).length, before, "nothing was spawned");
 });
+
+// 0.9.6 review lows
+test("P-L1: expected inactive states are informational, not failures in 'Read N of M'", async () => {
+  for (const state of ["access-token-expired", "needs-renewal"]) {
+    const { cli, service } = scripted();
+    cli.on(["status"], okReply(multi));
+    cli.on((argv) => argv.includes("usage"), (argv) => okReply({ status: argv.includes(idB) ? state : "ok" }));
+    const codex = (await service.refresh()).find((r) => r.provider === "codex")!;
+    assert.equal(codex.result.outcome, "success", state);
+    assert.doesNotMatch(codex.result.message, /\d of \d/);
+    assert.match(codex.result.message, /x-other/);
+  }
+  const { cli, service } = scripted();
+  cli.on(["status"], okReply(multi));
+  cli.on((argv) => argv.includes("usage"), (argv) => okReply({ status: argv.includes(idB) ? "access-token-expired" : "rate-limited" }));
+  const codex = (await service.refresh()).find((r) => r.provider === "codex")!;
+  assert.equal(codex.result.outcome, "unchanged");
+  assert.match(codex.result.message, /x-active/);
+  assert.doesNotMatch(codex.result.message, /x-other/, "the expected state is not listed as a failure");
+});
+test("P-L3: a usage read that times out is a read-only uncertainty, not a recovery instruction", async () => {
+  const { cli, service } = scripted();
+  cli.on(["status"], okReply(multi));
+  cli.on((argv) => argv.includes("usage"), { code: -2, stdout: "" } as never);
+  const results = await service.refresh();
+  for (const r of results) {
+    assert.doesNotMatch(r.result.message, /recovery/i);
+    assert.match(r.result.message, /Retry shortly|nothing was changed/);
+  }
+  const one = await service.refreshAccount({ provider: "codex", account: idB });
+  assert.doesNotMatch(one.message, /recovery/i);
+});
+test("P-L4: a second refresh while one runs answers one busy reply and reads nothing extra", async () => {
+  const { cli, service } = scripted();
+  cli.on(["status"], okReply(multi));
+  cli.on((argv) => argv.includes("usage"), okReply({ status: "ok" }));
+  const [first, second] = await Promise.all([service.refresh(), service.refresh()]);
+  assert.equal(first.length, 2);
+  assert.equal(second.length, 1);
+  assert.equal(second[0]!.result.code, "busy");
+  assert.equal(usageCalls(cli).length, 3);
+  assert.doesNotMatch(second[0]!.result.message, /Read 0/);
+});

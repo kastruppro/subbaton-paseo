@@ -1,4 +1,5 @@
 import type { PluginTheme } from "@getpaseo/plugin";
+import { footerHoverSurface } from "./contrast.js";
 import type {
   Status,
   DisplaySettings,
@@ -274,6 +275,7 @@ export function themePalette(theme: PluginTheme) {
     pop: c.surface1,
     row: c.surface1,
     hover: c.surface2,
+    footerHover: footerHoverSurface(c),
     line: c.border,
     text: c.foreground,
     muted: c.foregroundMuted,

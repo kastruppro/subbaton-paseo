@@ -42,6 +42,7 @@ import {
 import {
   footerCell,
   footerGrid,
+  footerSpeech,
   footerSummary,
   narrowFooterWidth,
   type FooterCell,
@@ -149,6 +150,8 @@ function FooterCellView({
         gap: 4,
         overflow: "hidden",
       }}
+      accessible
+      accessibilityLabel={footerSpeech(provider, cell)}
     >
       <Icon name={providerIcon[provider]} size={13} color={palette.muted} />
       <Text numberOfLines={1} style={{ fontSize: 12, color: palette.text, flexShrink: 0 }}>
@@ -232,18 +235,14 @@ function FooterContent({
   const label =
     mode === "grid"
       ? "SubBaton. " +
-        cells
-          .map(
-            ({ item, cell }) =>
-              `${providerLabel[item.provider]} ${cell.label}: ${cell.kind === "blocked" ? "unavailable" : cell.percent}`,
-          )
-          .join(". ") +
+        cells.map(({ item, cell }) => footerSpeech(item.provider, cell)).join(". ") +
         ". Open account details."
       : "SubBaton. Open account details.";
-  const message = (icon: string, text: string, color: string) => (
+  // Message text always uses the foreground token (AA on every surface it can sit on); only the icon is tinted.
+  const message = (icon: string, text: string, iconColor: string) => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 18 }}>
-      <Icon name={icon} size={13} color={color} />
-      <Text numberOfLines={1} style={{ fontSize: 12, color, flex: 1 }}>
+      <Icon name={icon} size={13} color={iconColor} />
+      <Text numberOfLines={1} style={{ fontSize: 12, color: palette.text, flex: 1 }}>
         {text}
       </Text>
     </View>
@@ -253,7 +252,7 @@ function FooterContent({
       style={{
         alignSelf: "stretch",
         minWidth: 0,
-        backgroundColor: hovered ? palette.hover : "transparent",
+        backgroundColor: hovered ? palette.footerHover : "transparent",
         borderTopWidth: 1,
         borderTopColor: palette.line,
       }}

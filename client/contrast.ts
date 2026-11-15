@@ -8,3 +8,19 @@ export function contrastRatio(a: string, b: string): number {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
   return (hi + 0.05) / (lo + 0.05);
 }
+
+/**
+ * Background of the hovered footer: the usual raised surface (surface2) unless the footer's text colours
+ * (foreground, amber and red) fall below WCAG AA (4.5:1) on it in this theme; then the lighter surface1.
+ */
+export function footerHoverSurface(c: {
+  surface1: string;
+  surface2: string;
+  foreground: string;
+  statusWarning: string;
+  statusDanger: string;
+}): string {
+  const ok = (surface: string) =>
+    [c.foreground, c.statusWarning, c.statusDanger].every((token) => contrastRatio(token, surface) >= 4.5);
+  return ok(c.surface2) ? c.surface2 : c.surface1;
+}

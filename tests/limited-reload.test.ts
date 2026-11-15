@@ -120,6 +120,7 @@ test("automatic switch: a busy agent is reloaded once it becomes idle, the other
   await h.externalSwitch(A, "ev2");
   await h.tick(); await h.settle();
   assert.equal(h.count("reload:b"), 0, "a running turn is never interrupted");
+  assert.deepEqual([h.count("reload:a"), h.count("reload:c")], [1, 1], "the others do not wait for it");
   h.state.set("b", "idle");
   await h.tick(); await h.settle(); await h.tick(); await h.settle();
   assert.deepEqual([h.count("reload:a"), h.count("reload:b"), h.count("reload:c")], [1, 1, 1]);

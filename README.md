@@ -9,7 +9,7 @@ A [Paseo](https://paseo.sh) plugin for the SubBaton account switcher. It shows s
 
 - **Usage footer:** selected quota windows of the active accounts, with warning and danger colours. Tap it for all saved accounts, reset times and login expiry.
 - **Switching:** named switches for Claude, Codex and agy; best/next-available strategies for Claude.
-- **"When idle" handoff:** for Codex and agy, waits until every Paseo agent of that provider is idle, lets the CLI switch, and reopens the agents with `agent.reload()` so they continue under the new login.
+- **"When idle" handoff:** for Codex and agy, for agy waits until every Paseo agent is idle before the switch. For Codex each agent has its own app-server, so there is no global gate: after the switch every agent that is not running (idle or stopped in an error) is reloaded at once with `agent.reload()`, and a running agent is reloaded as soon as it is idle (within the idle wait); only the optional shared-daemon restart waits for all agents to be idle.
 - **Reload after every verified Codex switch:** also when you switch in the SubBaton menu bar app, in a terminal, or when the background poller switches automatically. Only idle agents are reloaded; terminal Codex sessions are never killed.
 - **Settings screen:** every SubBaton CLI setting, the background poller, events and the automatic plan.
 

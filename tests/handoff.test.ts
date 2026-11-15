@@ -877,3 +877,44 @@ test("P9-2: the automatic switch event's target is carried to adoption; an unkno
     assert.deepEqual(adopted, expected as never, String(eventTarget));
   }
 });
+
+// Per-agent Codex reloads: no all-idle gate; only the shared daemon restart keeps it.
+test("codex: one busy and two idle agents reload the idle ones at once and the busy one when it turns idle", async () => {
+  const { cli, agents, coordinator } = setup();
+  agents.agents = [agent("c1", "codex"), agent("c2", "codex", "error"), agent("c3", "codex", "running", true)];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  assert.equal(cli.switches.length, 1, "the switch does not wait for the running agent");
+  assert.deepEqual(agents.reloads.sort(), ["c1", "c2"]);
+  assert.equal(coordinator.status().handoffs.codex?.phase, "reopening");
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads.sort(), ["c1", "c2"], "a running turn is never interrupted");
+  agents.agents[2] = agent("c3", "codex");
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads.sort(), ["c1", "c2", "c3"]);
+  assert.equal(coordinator.status().handoffs.codex?.phase, "done");
+});
+test("codex: a busy agent past the deadline gets no reload and never blocked the others", async () => {
+  const { agents, coordinator, advance } = setup({ idleWaitMinutes: 1 });
+  agents.agents = [agent("c1", "codex"), agent("c3", "codex", "running", true)];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads, ["c1"]);
+  advance(120);
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads, ["c1"]);
+  assert.equal(coordinator.status().handoffs.codex?.phase, "done");
+  assert.equal(coordinator.status().handoffs.codex?.code, "reopenTimeout");
+});
+test("codex: the shared daemon restart still waits for every agent to be idle", async () => {
+  const { cli, agents, coordinator } = setup({ restartCodexDaemon: true });
+  agents.agents = [agent("c1", "codex"), agent("c3", "codex", "running", true)];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  assert.equal(cli.switches.length, 0);
+  assert.deepEqual(agents.reloads, []);
+  agents.agents[1] = agent("c3", "codex");
+  await coordinator.tick(agents);
+  assert.equal(cli.switches.length, 1);
+  assert.deepEqual(agents.reloads.sort(), ["c1", "c3"]);
+});

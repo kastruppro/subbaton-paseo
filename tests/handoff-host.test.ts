@@ -72,7 +72,9 @@ test("host wiring registers the RPCs, uses the context's agent API and nudges on
   const requested = (await handlers.get("handoff.request")!({ provider: "codex", target }, { paseo })) as { result: { outcome: string } };
   assert.equal(requested.result.outcome, "success");
   await host.coordinator.tick(host.capture({ paseo }));
-  assert.equal(host.coordinator.status().handoffs.codex?.phase, "waiting");
+  // No global gate for Codex: the switch ran and the running agent is reloaded only once it is idle.
+  assert.equal(host.coordinator.status().handoffs.codex?.phase, "reopening");
+  assert.deepEqual(reloads, []);
   running = false;
   await hooks.get("agent.turn.after")!({ agent: { id: "c1" } }, { paseo });
   await host.coordinator.tick(host.capture({ paseo }));

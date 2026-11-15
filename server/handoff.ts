@@ -517,7 +517,11 @@ export class HandoffCoordinator {
 
   private async waitAndSwitch(h: Handoff, agents: AgentPort) {
     const mine = (await agents.list()).filter((a) => a.provider === paseoProviderId[h.provider]);
-    const busy = mine.filter(busyStatus);
+    // Each Paseo Codex agent has its own app-server, so a reload of one never affects another: Codex needs no
+    // all-idle gate, running agents are reloaded one by one once they are idle (see reopen). Only the shared
+    // daemon restart interrupts every attached session, and agy stops processes: those keep the gate.
+    const perAgent = h.provider === "codex" && !h.restartDaemon;
+    const busy = perAgent ? [] : mine.filter(busyStatus);
     if (busy.length > 0) {
       this.update(h, {
         waitingFor: busy.length,
@@ -526,7 +530,7 @@ export class HandoffCoordinator {
       });
       return;
     }
-    let affected = mine.filter((a) => reloadable(h.provider, a)).map((a) => a.id);
+    let affected = mine.filter((a) => (perAgent ? reloadable(h.provider, a) || busyStatus(a) : reloadable(h.provider, a))).map((a) => a.id);
     if (h.target === null) {
       const settings = await this.settings();
       if (!settings.reloadCodexAfterAutomaticSwitch) affected = [];
@@ -643,7 +647,7 @@ export class HandoffCoordinator {
     // Review L1: re-check right before the CLI runs; anything busy or a changed idle set goes back to waiting.
     const again = (await agents.list()).filter((a) => a.provider === paseoProviderId[h.provider]);
     const idleNow = again.filter((a) => reloadable(h.provider, a)).map((a) => a.id).sort();
-    if (again.some(busyStatus) || idleNow.join() !== [...affected].sort().join()) {
+    if (!perAgent && (again.some(busyStatus) || idleNow.join() !== [...affected].sort().join())) {
       this.update(h, { phase: "waiting", affected: [], code: "becameBusy", message: "An agent started a turn or the set of agents changed; waiting again." });
       return;
     }

@@ -130,3 +130,82 @@ test("host wiring continues a limited Codex agent once after a verified switch w
   assert.equal(calls.filter((c) => c.startsWith("send:")).length, 1);
   host.cleanup();
 });
+
+// Manual switch with the daemon restart opt-in off: the plugin's own reload of the agent adopts the login.
+const other = "55555555-5555-4555-8555-555555555555";
+async function manualFlow(opts: { activeAfter?: string; secondLimitAfterSwitch?: boolean; restart?: boolean }) {
+  const { cli, service } = scripted();
+  const two = (active: string) => ({
+    ...status,
+    providers: [{ ...status.providers[0], provider: "codex", accounts: [
+      { ...status.providers[0]!.accounts[0]!, id: other, alias: "Old", active: active === other },
+      { ...status.providers[0]!.accounts[0]!, id: target, alias: "New", active: active === target },
+    ] }],
+  });
+  cli.on(["status"], ok(two(opts.activeAfter ?? target)));
+  await service.status();
+  cli.on(["codex", "switch"], ok({ outcome: "switched", postSwitchVerification: "verified", daemonOutcome: "not-requested", transaction: "T7" }));
+  const handlers = new Map<string, (input: unknown, context: unknown) => unknown>();
+  const hooks = new Map<string, (event: unknown, context: unknown) => Promise<void>>();
+  const calls: string[] = [];
+  const state = new Map<string, string>([["c1", "error"], ["c2", "idle"]]);
+  const paseo = {
+    agents: {
+      async list() {
+        return { entries: [...state].map(([id, st]) => ({ agent: { id, provider: "codex", status: st, activeTurn: null } })), pageInfo: { hasMore: false, nextCursor: null } };
+      },
+      ref: (id: string) => ({
+        reload: async () => { calls.push(`reload:${id}`); state.set(id, "idle"); },
+        send: async (text: string) => void calls.push(`send:${id}:${text}`),
+      }),
+    },
+  };
+  const values = { reloadCodexAfterAutomaticSwitch: false, restartCodexDaemon: opts.restart ?? false, idleWaitMinutes: 30, resumeLimitedCodexAgents: true };
+  const host = registerHandoff(
+    {
+      registerSettings: (() => ({ read: async () => ({ status: "ready", revision: "1", values }), subscribe: () => () => {} })) as never,
+      handle: ((contract: { name: string }, handler: (input: unknown, context: unknown) => unknown) => handlers.set(contract.name, handler)) as never,
+      addHook: ((name: string, handler: (event: unknown, context: unknown) => Promise<void>) => { hooks.set(name, handler); return () => {}; }) as never,
+    },
+    service,
+    { load: async () => null, save: async () => {} },
+    60_000,
+    { load: async () => null, save: async () => {} },
+  );
+  const limited = async (id: string, turn: string) => {
+    const agent = { id, provider: "codex", workspaceId: `w-${id}` };
+    await hooks.get("agent.turn.before")!({ agent, turnId: turn }, { paseo });
+    await hooks.get("agent.turn.after")!({ agent, turnId: turn, outcome: { kind: "failed", error: { message: "You've hit your usage limit." } } }, { paseo });
+  };
+  await limited("c1", "t1");
+  await new Promise((r) => setTimeout(r, 5));
+  await handlers.get("handoff.request")!({ provider: "codex", target }, { paseo });
+  await host.coordinator.tick(host.capture({ paseo }));
+  await new Promise((r) => setTimeout(r, 30));
+  if (opts.secondLimitAfterSwitch) {
+    // c2 ends in a limit after the switch, on the new login: a second limited account, not recoverable.
+    await new Promise((r) => setTimeout(r, 5));
+    await limited("c2", "t5");
+    await new Promise((r) => setTimeout(r, 30));
+  }
+  host.cleanup();
+  return { calls, cli };
+}
+const sendText = "Continue the previous task from where it stopped because of the usage limit.";
+test("manual switch with the restart opt-in off continues the limited agent exactly once", async () => {
+  const { calls, cli } = await manualFlow({});
+  assert.deepEqual(calls.filter((c) => c.startsWith("send:")), [`send:c1:${sendText}`]);
+  assert.equal(calls.filter((c) => c === "reload:c1").length, 1);
+  assert.ok(!cli.calls.some((c) => c.argv.includes("restart")), "no daemon restart");
+});
+test("the switch target is no longer active at the recheck: nothing is reloaded or sent", async () => {
+  const { calls } = await manualFlow({ activeAfter: other });
+  // the existing handoff may reload idle agents; the limited agent c1 is neither reloaded nor sent anything
+  assert.deepEqual(calls.filter((c) => c.includes("c1")), []);
+  assert.deepEqual(calls.filter((c) => c.startsWith("send:")), []);
+});
+test("a second limited account after the switch is not continued", async () => {
+  const { calls } = await manualFlow({ secondLimitAfterSwitch: true });
+  assert.deepEqual(calls.filter((c) => c.startsWith("send:")), [`send:c1:${sendText}`]);
+  assert.ok(!calls.some((c) => c.startsWith("send:c2")));
+});

@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { AgentPort, AgentSnapshot } from "./handoff.js";
 
-// Limited Codex agent continuation (0.9.0). After a verified Codex account switch whose daemon
-// restart succeeded for the same current login, each Codex agent whose latest turn positively ended
+// Limited Codex agent continuation (0.9.0). After a verified Codex account switch (the plugin's own
+// reload of an agent makes it adopt the new login; no daemon restart is needed), each Codex agent whose latest turn positively ended
 // in a provider usage limit is reloaded and sent ONE continuation message. Everything here fails
 // closed: ambiguous history, a missing turn ID, a failed store or any doubt means no message.
 // Evidence and open points: docs/limited-agents.md.
@@ -175,10 +175,11 @@ export class LimitedAgentRecovery {
   }
 
   /**
-   * A verified Codex switch whose daemon restart succeeded. `expectedAccount` (the switch target, when
-   * known) must be the account that is active now; a newer adoption supersedes a pending one.
+   * A verified Codex switch. `expectedAccount` (the switch target, when known) must be the account that
+   * is active now; `switchedAt` is when the switch happened (default: now), so a limit that ended after
+   * it, on the new login, is never recovered. A newer adoption supersedes a pending one.
    */
-  adopt(key: string, expectedAccount: string | null): Promise<void> {
+  adopt(key: string, expectedAccount: string | null, switchedAt: number | null = null): Promise<void> {
     return this.serial(async () => {
       await this.init();
       const current = await this.currentAccount().catch(() => null);
@@ -186,7 +187,7 @@ export class LimitedAgentRecovery {
         this.pending = null;
         return;
       }
-      this.pending = { key, accountId: current, since: this.now() };
+      this.pending = { key, accountId: current, since: Math.min(this.now(), switchedAt ?? Infinity) };
     });
   }
 

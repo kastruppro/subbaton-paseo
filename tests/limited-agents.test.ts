@@ -327,3 +327,23 @@ test("resumeLimitedCodexAgents defaults to true and is host-scoped; older stored
   assert.equal(handoffSettings.schema.parse({ resumeLimitedCodexAgents: false }).resumeLimitedCodexAgents, false);
   assert.equal(handoffSettings.schema.parse({}).restartCodexDaemon, false, "resume default never enables the daemon restart");
 });
+
+test("a limit that ended after the switch time is a second limited account, even if adopted later", async () => {
+  const r = make(), port = new Fake();
+  port.add("a");
+  r.clock.t = 2100;
+  await r.recovery.turnBefore(codexAgent("a"), "t1");
+  await r.recovery.turnAfter(codexAgent("a"), "t1", failed()); // ended at 2100
+  r.clock.t = 2200;
+  await r.recovery.adopt("txn:late", null, 2050); // the switch happened at 2050
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, []);
+  port.add("b");
+  r.clock.t = 2000;
+  await r.recovery.turnBefore(codexAgent("b"), "t1");
+  await r.recovery.turnAfter(codexAgent("b"), "t1", failed()); // ended at 2000, before the switch
+  r.clock.t = 2200;
+  await r.recovery.adopt("txn:late2", null, 2050);
+  await r.recovery.run(port);
+  assert.deepEqual(port.sends(), [`send:b:${continuationText}`]);
+});

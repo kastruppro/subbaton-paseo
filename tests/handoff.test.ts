@@ -368,7 +368,7 @@ test("a Codex automatic switch event queues a reload-only handoff; older events 
 });
 
 test("the automatic reload follow-up can be turned off", async () => {
-  const { cli, agents, coordinator } = setup({ reloadCodexAfterAutomaticSwitch: false });
+  const { cli, agents, coordinator } = setup({ reloadCodexAfterAutomaticSwitch: false, resumeLimitedCodexAgents: false });
   cli.events_ = [{ at: 2000, provider: "codex", kind: "automaticSwitch" }];
   await coordinator.tick(agents);
   assert.deepEqual(cli.eventReads, []);
@@ -774,14 +774,15 @@ test("maximum event identifiers never invalidate the persisted dedupe state", as
   }
 });
 
-// 0.9.0: limited-agent continuation may start only after a verified switch AND a successful daemon restart.
-test("adoption is reported only for a verified manual Codex switch with a successful daemon restart", async () => {
+// 0.9.0: limited-agent continuation may start after a verified Codex switch (the plugin's own reload
+// of the agent adopts the new login; a successful daemon restart is not required).
+test("adoption is reported for every verified manual Codex switch, whatever the daemon restart did", async () => {
   for (const [kind, daemonOutcome, expectAdopted] of [
     ["switched", "restarted", true],
-    ["switched", "pending", false],
-    ["switched", "failed", false],
-    ["switched", "busy", false],
-    ["switched", "not-requested", false],
+    ["switched", "pending", true],
+    ["switched", "failed", true],
+    ["switched", "busy", true],
+    ["switched", "not-requested", true],
     ["unchanged", "restarted", false],
   ] as const) {
     const { cli, agents, coordinator } = setup({ restartCodexDaemon: true });
@@ -794,6 +795,17 @@ test("adoption is reported only for a verified manual Codex switch with a succes
     assert.deepEqual(adopted, expectAdopted ? [["txn:T1", target]] : [], `${kind}/${daemonOutcome}`);
   }
 });
+test("manual switch with the daemon restart opt-in off is still adopted", async () => {
+  const { cli, agents, coordinator } = setup({ restartCodexDaemon: false });
+  const adopted: string[] = [];
+  coordinator.onCodexAdopted = (key) => void adopted.push(key);
+  agents.agents = [agent("c1", "codex")];
+  cli.outcome = { kind: "switched", code: "switched", message: "ok", daemonOutcome: "not-requested", transaction: "T2" };
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  assert.deepEqual(adopted, ["txn:T2"]);
+  assert.equal(cli.daemonRestarts, 0, "continuation never enables the restart");
+});
 test("a manual switch without a transaction identity is never adopted", async () => {
   const { cli, agents, coordinator } = setup({ restartCodexDaemon: true });
   const adopted: string[] = [];
@@ -804,24 +816,41 @@ test("a manual switch without a transaction identity is never adopted", async ()
   await coordinator.tick(agents);
   assert.deepEqual(adopted, []);
 });
-test("an automatic switch is adopted after the daemon restart, keyed by its switch event", async () => {
+test("an automatic switch is adopted at the idle boundary, keyed by its switch event and time", async () => {
   for (const [restartCodexDaemon, outcome, expected] of [
     [true, "restarted", ["txn:T9"]],
-    [true, "failed", []],
+    [true, "failed", ["txn:T9"]],
     [true, "busy", []],
-    [false, "restarted", []],
+    [false, "restarted", ["txn:T9"]],
   ] as const) {
     const { cli, agents, coordinator } = setup({ restartCodexDaemon });
-    const adopted: string[] = [];
-    coordinator.onCodexAdopted = (key) => void adopted.push(key);
+    const adopted: [string, number | null][] = [];
+    coordinator.onCodexAdopted = (key, _account, switchedAt) => void adopted.push([key, switchedAt]);
     agents.agents = [agent("c1", "codex")];
     cli.daemonPending = true;
     cli.daemonOutcome = outcome;
     cli.events_ = [{ id: "e1", transaction: "T9", at: 2000, provider: "codex", kind: "automaticSwitch" }];
     await coordinator.tick(agents);
     await coordinator.tick(agents);
-    assert.deepEqual(adopted, [...expected], `${restartCodexDaemon}/${outcome}`);
+    assert.deepEqual(adopted, expected.map((k) => [k, 2000]), `${restartCodexDaemon}/${outcome}`);
   }
+});
+test("automatic switch events are watched for continuation even when reload and restart are both off", async () => {
+  const { cli, agents, coordinator } = setup({ restartCodexDaemon: false, reloadCodexAfterAutomaticSwitch: false });
+  const adopted: string[] = [];
+  coordinator.onCodexAdopted = (key) => void adopted.push(key);
+  agents.agents = [agent("c1", "codex")];
+  cli.events_ = [{ id: "e1", transaction: "T9", at: 2000, provider: "codex", kind: "automaticSwitch" }];
+  await coordinator.tick(agents);
+  await coordinator.tick(agents);
+  assert.deepEqual(adopted, ["txn:T9"]);
+  assert.deepEqual(agents.reloads, [], "the handoff itself reloads nothing");
+});
+test("with continuation off, switch events are not watched when reload and restart are off", async () => {
+  const { cli, agents, coordinator } = setup({ restartCodexDaemon: false, reloadCodexAfterAutomaticSwitch: false, resumeLimitedCodexAgents: false });
+  cli.events_ = [{ id: "e1", transaction: "T9", at: 2000, provider: "codex", kind: "automaticSwitch" }];
+  await coordinator.tick(agents);
+  assert.deepEqual(cli.eventReads, []);
 });
 test("a daemon restart that is merely pending from an unknown switch is not adopted", async () => {
   const { cli, agents, coordinator } = setup({ restartCodexDaemon: true });

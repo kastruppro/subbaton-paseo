@@ -45,9 +45,9 @@ export function registerHandoff(
     async () => (await read()).resumeLimitedCodexAgents,
     () => service.activeAccount("codex"),
   );
-  coordinator.onCodexAdopted = (key, account) =>
+  coordinator.onCodexAdopted = (key, account, switchedAt) =>
     void recovery
-      .adopt(key, account)
+      .adopt(key, account, switchedAt)
       .then(() => recovery.run(latest))
       .catch(() => undefined);
   const nudge = (port: AgentPort | null = latest) => void coordinator.tick(port).catch(() => undefined);

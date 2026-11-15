@@ -147,8 +147,8 @@ export class HandoffCoordinator {
   private tickPort: AgentPort | null = null;
   private running = false;
   agentApiSeen = false;
-  /** Called once per verified Codex switch whose daemon restart succeeded (account = switch target, when known). */
-  onCodexAdopted: ((switchKey: string, account: string | null) => void) | null = null;
+  /** Called once per verified Codex switch with a known identity (account = switch target, when known). */
+  onCodexAdopted: ((switchKey: string, account: string | null, switchedAt: number | null) => void) | null = null;
   private paseoAnchor: number | null;
   private listTimeoutMs: number;
   private reloadTimeoutMs: number;
@@ -297,6 +297,7 @@ export class HandoffCoordinator {
         failedReopen: [],
         daemonOutcome: null,
         switchKey: null,
+        switchedAt: null,
       };
       this.state.handoffs[provider] = handoff;
       await this.persist();
@@ -384,7 +385,7 @@ export class HandoffCoordinator {
   }
 
   /** A reload-only Codex handoff after a verified switch; optionally restarts the shared daemon. */
-  private automaticCodex(settings: HandoffSettings, code: string, message: string, switchKey: string | null = null): Handoff {
+  private automaticCodex(settings: HandoffSettings, code: string, message: string, switchKey: string | null = null, switchedAt: number | null = null): Handoff {
     const now = this.now();
     return {
       id: this.newId(),
@@ -405,6 +406,7 @@ export class HandoffCoordinator {
       failedReopen: [],
       daemonOutcome: null,
       switchKey,
+      switchedAt,
     };
   }
   private switchKey(key: string) {
@@ -417,7 +419,7 @@ export class HandoffCoordinator {
   private async pollEvents() {
     if (this.now() - this.lastEventPoll < 60 || !terminal(this.state.handoffs.codex)) return;
     const settings = await this.settings();
-    if (!settings.reloadCodexAfterAutomaticSwitch && !settings.restartCodexDaemon) return;
+    if (!settings.reloadCodexAfterAutomaticSwitch && !settings.restartCodexDaemon && !settings.resumeLimitedCodexAgents) return;
     this.lastEventPoll = this.now();
     const read = await this.cli.events(this.state.eventWatermark);
     if (read.ok) {
@@ -437,6 +439,7 @@ export class HandoffCoordinator {
               const last = unseen[unseen.length - 1]!;
               return this.switchKey(last.transaction ? "txn:" + last.transaction : "event:" + (last.id ?? `${last.at}:${last.kind}`));
             })(),
+            unseen[unseen.length - 1]!.at,
           );
         }
         await this.persist();
@@ -481,6 +484,7 @@ export class HandoffCoordinator {
       failedReopen: [],
       daemonOutcome: null,
       switchKey: null,
+      switchedAt: null,
     };
     await this.persist();
   }
@@ -548,8 +552,9 @@ export class HandoffCoordinator {
         code: affected.length ? "reloading" : daemonOutcome === "restarted" ? "daemonRestarted" : "nothingToReload",
         message: (affected.length ? "Reloading idle Codex agents with the new login." : "No Paseo Codex agents needed a reload.") + daemonNote,
       });
-      // Adoption: a verified switch AND a successful restart of the daemon for this login.
-      if (daemonOutcome === "restarted" && h.switchKey) this.onCodexAdopted?.(h.switchKey, null);
+      // Adoption: a verified switch. The plugin's own reload of a limited agent adopts the new login;
+      // a successful daemon restart is not required (and is never enabled for this).
+      if (h.switchKey) this.onCodexAdopted?.(h.switchKey, null, h.switchedAt);
       return;
     }
     const options: SwitchOptions = {};
@@ -664,8 +669,8 @@ export class HandoffCoordinator {
           code: out.kind === "switched" ? "switched" : "alreadyActive",
           message: reload ? "Switch verified. Reopening agents with their saved conversations." : out.kind === "switched" ? "Switch verified. No Paseo agents needed reopening." : "That account was already active.",
         });
-        if (h.provider === "codex" && out.kind === "switched" && daemonOutcome === "restarted" && out.transaction)
-          this.onCodexAdopted?.("txn:" + out.transaction, h.target);
+        if (h.provider === "codex" && out.kind === "switched" && out.transaction)
+          this.onCodexAdopted?.("txn:" + out.transaction, h.target, this.now());
         return;
       }
       case "refused":

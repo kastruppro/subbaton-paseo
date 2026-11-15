@@ -17,11 +17,19 @@ export type TurnOutcome =
   | { kind: "completed" }
   | { kind: "failed"; error: { message: string; code?: string } }
   | { kind: "canceled"; reason: string };
-export function isLimitFailure(outcome: TurnOutcome): boolean {
-  if (outcome.kind !== "failed") return false;
+/** How a failed turn was recognised as a usage limit: by the structured code, by the anchored text, or not at all. */
+export function limitMatch(outcome: TurnOutcome): "code" | "text" | null {
+  if (outcome.kind !== "failed") return null;
   const { message, code } = outcome.error;
-  return (code !== undefined && limitCodes.has(code)) || (typeof message === "string" && limitMessage.test(message));
+  if (code !== undefined && limitCodes.has(code)) return "code";
+  return typeof message === "string" && limitMessage.test(message) ? "text" : null;
 }
+export const isLimitFailure = (outcome: TurnOutcome): boolean => limitMatch(outcome) !== null;
+
+/** Log lines carry this prefix, short agent IDs and saved account IDs only (never tokens, prompts or agent output). */
+export const logPrefix = "[subbaton] limited-agents:";
+const short = (id: string) => id.slice(0, 8);
+const shortKey = (key: string) => (key.length > 40 ? key.slice(0, 40) + "…" : key);
 
 export interface HookAgent {
   id: string;
@@ -78,7 +86,17 @@ export class LimitedAgentRecovery {
     private currentAccount: () => Promise<string | null>,
     private now: () => number = () => Date.now() / 1000,
     private timeoutMs = 30_000,
+    /** One line per decision; the plugin's stdout shows in `paseo plugin logs subbaton`. */
+    private log: (line: string) => void = (line) => console.log(line),
   ) {}
+
+  private say(message: string) {
+    try {
+      this.log(`${logPrefix} ${message}`);
+    } catch {
+      // logging never changes a decision
+    }
+  }
 
   private init() {
     this.ready ??= (async () => {
@@ -92,6 +110,7 @@ export class LimitedAgentRecovery {
       } catch {
         this.trusted = false;
       }
+      if (!this.trusted) this.say("state file unreadable, continuation disabled until it is fixed");
     })();
     return this.ready;
   }
@@ -115,8 +134,8 @@ export class LimitedAgentRecovery {
     return next;
   }
 
-  private forget(agentId: string) {
-    this.candidates.delete(agentId);
+  private forget(agentId: string, reason?: string) {
+    if (this.candidates.delete(agentId) && reason) this.say(`candidate dropped agent=${short(agentId)} reason=${reason}`);
   }
   private lineageOf(agentId: string) {
     return this.state.lineage.find((l) => l.agentId === agentId);
@@ -130,7 +149,7 @@ export class LimitedAgentRecovery {
     await (async () => {
       if (agent.provider !== "codex") return;
       await this.init();
-      this.forget(agent.id);
+      this.forget(agent.id, "turn started again");
       const entry = this.lineageOf(agent.id);
       if (entry?.state === "sent") entry.turnId = turnId, (entry.state = "turn");
       else {
@@ -149,27 +168,34 @@ export class LimitedAgentRecovery {
       await this.init();
       const entry = this.lineageOf(agent.id);
       const continuation = !!entry && (entry.state === "sent" || entry.turnId === turnId);
-      this.forget(agent.id);
-      if (isLimitFailure(outcome)) {
+      const who = short(agent.id);
+      this.forget(agent.id, outcome.kind === "canceled" ? "canceled" : outcome.kind === "completed" ? "turn completed" : undefined);
+      const via = limitMatch(outcome);
+      if (via) {
         if (continuation) {
           // A limited continuation is never continued again until new user activity.
           if (!this.state.suppressed.includes(agent.id)) this.state.suppressed.push(agent.id);
           this.dropLineage(agent.id);
-        } else if (
-          this.trusted &&
-          turnId &&
-          !this.state.suppressed.includes(agent.id) &&
-          (await this.resumeEnabled())
-        )
+          this.say(`continuation hit a limit again agent=${who}, suppressed until new activity`);
+        } else if (!this.trusted) this.say(`candidate not recorded agent=${who} reason=state untrusted`);
+        else if (!turnId) this.say(`candidate not recorded agent=${who} reason=no turn id`);
+        else if (this.state.suppressed.includes(agent.id)) this.say(`candidate not recorded agent=${who} reason=suppressed after a limited continuation`);
+        else if (!(await this.resumeEnabled())) this.say(`candidate not recorded agent=${who} reason=setting off`);
+        else {
           this.candidates.set(agent.id, { turnId, at: this.now() });
-      } else if (continuation) this.dropLineage(agent.id);
+          this.say(`limit detected agent=${who} provider=codex via=${via} turn=${short(turnId)}`);
+        }
+      } else if (continuation) {
+        this.dropLineage(agent.id);
+        this.say(`continuation ended without a limit agent=${who}`);
+      }
       await this.persist();
     })();
   }
 
   async archived(agentId: string): Promise<void> {
     await this.init();
-    this.forget(agentId);
+    this.forget(agentId, "archived");
     this.dropLineage(agentId);
     await this.persist();
   }
@@ -184,11 +210,16 @@ export class LimitedAgentRecovery {
       await this.init();
       const current = await this.currentAccount().catch(() => null);
       // An unknown switch target fails closed: the attempt is never bound to whatever login is current later.
-      if (!this.trusted || !current || typeof expectedAccount !== "string" || !expectedAccount || expectedAccount !== current) {
+      const refuse = (reason: string) => {
         this.pending = null;
-        return;
-      }
+        this.say(`adoption refused key=${shortKey(key)} reason=${reason}`);
+      };
+      if (!this.trusted) return refuse("state untrusted");
+      if (!expectedAccount || typeof expectedAccount !== "string") return refuse("switch target unknown");
+      if (!current) return refuse("active login unknown");
+      if (expectedAccount !== current) return refuse(`target ${expectedAccount} is not the active login ${current}`);
       this.pending = { key, accountId: current, since: Math.min(this.now(), switchedAt ?? Infinity) };
+      this.say(`switch adopted key=${shortKey(key)} account=${current} candidates=${this.candidates.size}`);
     });
   }
 
@@ -204,7 +235,7 @@ export class LimitedAgentRecovery {
       const pending = this.pending;
       for (const [agentId, candidate] of [...this.candidates]) {
         if (this.pending !== pending) return;
-        await this.attempt(port, pending, agentId, candidate).catch(() => undefined);
+        await this.attempt(port, pending, agentId, candidate).catch(() => this.say(`attempt aborted agent=${short(agentId)} reason=unexpected error`));
       }
     });
   }
@@ -212,56 +243,78 @@ export class LimitedAgentRecovery {
   private same(pending: Pending, agentId: string, candidate: Candidate) {
     return this.pending === pending && this.candidates.get(agentId) === candidate;
   }
-  private async eligible(port: AgentPort, pending: Pending, agentId: string, candidate: Candidate, afterReload: boolean) {
-    if (!this.same(pending, agentId, candidate) || !(await this.resumeEnabled())) return "drop" as const;
-    if (this.state.suppressed.includes(agentId)) return "drop" as const;
-    if ((await this.currentAccount().catch(() => null)) !== pending.accountId) return "drop" as const;
+  /** "ok", "wait" (busy, try later) or a drop reason. */
+  private async eligible(port: AgentPort, pending: Pending, agentId: string, candidate: Candidate, afterReload: boolean): Promise<{ state: "ok" | "wait" } | { state: "drop"; reason: string }> {
+    const drop = (reason: string) => ({ state: "drop" as const, reason });
+    if (!this.same(pending, agentId, candidate)) return drop("candidate replaced or switch superseded");
+    if (!(await this.resumeEnabled())) return drop("setting off");
+    if (this.state.suppressed.includes(agentId)) return drop("suppressed after a limited continuation");
+    const active = await this.currentAccount().catch(() => null);
+    if (active !== pending.accountId) return { state: "drop", reason: `login changed, expected ${pending.accountId}, active ${active ?? "unknown"}` };
     const snapshot = (await withTimeout(port.list(), this.timeoutMs)).find((a) => a.id === agentId);
-    if (!snapshot || snapshot.provider !== "codex") return "drop" as const;
-    if (!this.same(pending, agentId, candidate)) return "drop" as const;
-    if (busy(snapshot)) return afterReload ? ("drop" as const) : ("wait" as const);
-    if (afterReload ? snapshot.status !== "idle" : !["idle", "error"].includes(snapshot.status)) return "drop" as const;
-    return "ok" as const;
+    if (!snapshot || snapshot.provider !== "codex") return drop("agent gone, archived or not Codex");
+    if (!this.same(pending, agentId, candidate)) return drop("owner activity during the check");
+    if (busy(snapshot)) return afterReload ? drop("turn started after the reload") : { state: "wait" };
+    if (afterReload ? snapshot.status !== "idle" : !["idle", "error"].includes(snapshot.status)) return drop(`agent state ${snapshot.status}`);
+    return { state: "ok" };
   }
 
   private async attempt(port: AgentPort, pending: Pending, agentId: string, candidate: Candidate) {
     const send = port.send!.bind(port);
-    const drop = () => void (this.candidates.get(agentId) === candidate && this.candidates.delete(agentId));
-    if (candidate.at >= pending.since) return void this.candidates.delete(agentId);
+    const who = short(agentId);
+    const drop = (reason?: string) => {
+      if (this.candidates.get(agentId) === candidate) this.candidates.delete(agentId);
+      if (reason) this.say(`skipped agent=${who} reason=${reason}`);
+    };
+    if (candidate.at >= pending.since) return drop("limit ended after the switch");
     const id = `${pending.key}|${agentId}|${candidate.turnId}`;
-    if (this.state.consumed.includes(id)) return void this.candidates.delete(agentId);
+    if (this.state.consumed.includes(id)) return drop("already consumed for this switch");
     const first = await this.eligible(port, pending, agentId, candidate, false);
-    if (first === "wait") return;
-    if (first === "drop") return drop();
+    if (first.state === "wait") return void this.say(`waiting agent=${who} reason=turn running`);
+    if (first.state === "drop") return drop(first.reason);
+    this.say(`login recheck before reload ok account=${pending.accountId} agent=${who}`);
     // Every side effect is preceded by a fresh eligibility check made after the previous persistence
     // step finished, and by a synchronous identity check with no await in between.
-    if (!(await this.consume(id))) return drop();
-    const beforeReload = await this.eligible(port, pending, agentId, candidate, false).catch(() => "drop" as const);
-    if (beforeReload !== "ok" || !this.same(pending, agentId, candidate)) return drop();
+    if (!(await this.consume(id))) return drop("could not persist the attempt");
+    this.say(`attempt persisted agent=${who} turn=${short(candidate.turnId)} key=${shortKey(pending.key)}`);
+    const beforeReload = await this.eligible(port, pending, agentId, candidate, false).catch(() => ({ state: "drop" as const, reason: "check failed" }));
+    if (beforeReload.state !== "ok" || !this.same(pending, agentId, candidate)) return drop(beforeReload.state === "drop" ? `${beforeReload.reason} (after persisting)` : "changed after persisting");
+    this.say(`reload started agent=${who}`);
     try {
       await withTimeout(port.reload(agentId), this.timeoutMs);
     } catch {
-      return drop();
+      this.candidates.get(agentId) === candidate && this.candidates.delete(agentId);
+      return void this.say(`reload failed agent=${who}, attempt consumed, no message`);
     }
-    const second = await this.eligible(port, pending, agentId, candidate, true).catch(() => "drop" as const);
-    if (second !== "ok") return drop();
+    this.say(`reload finished agent=${who}`);
+    const second = await this.eligible(port, pending, agentId, candidate, true).catch(() => ({ state: "drop" as const, reason: "check failed" }));
+    if (second.state !== "ok") {
+      this.candidates.get(agentId) === candidate && this.candidates.delete(agentId);
+      return void this.say(
+        second.state === "drop" && second.reason.startsWith("login changed")
+          ? `login recheck after reload failed agent=${who}, ${second.reason.replace("login changed, ", "")}, no message`
+          : `skipped agent=${who} reason=${second.state === "drop" ? second.reason : "not idle"} (after reload)`,
+      );
+    }
+    this.say(`login recheck after reload ok account=${pending.accountId} agent=${who}`);
     // Mark the continuation before sending so a restart between the two cannot treat it as user activity.
     this.dropLineage(agentId);
     const mark = { agentId, state: "sent" as const, turnId: null };
     this.state.lineage.push(mark);
     const saved = await this.persist();
-    const beforeSend = saved ? await this.eligible(port, pending, agentId, candidate, true).catch(() => "drop" as const) : "drop";
-    if (beforeSend !== "ok" || !this.same(pending, agentId, candidate) || this.lineageOf(agentId) !== mark) {
+    const beforeSend = saved ? await this.eligible(port, pending, agentId, candidate, true).catch(() => ({ state: "drop" as const, reason: "check failed" })) : ({ state: "drop" as const, reason: "could not persist the marker" });
+    if (beforeSend.state !== "ok" || !this.same(pending, agentId, candidate) || this.lineageOf(agentId) !== mark) {
       // Nothing was sent: remove the marker so a later turn is not mistaken for a continuation.
       if (this.lineageOf(agentId) === mark) this.dropLineage(agentId);
       await this.persist();
-      return drop();
+      return drop(beforeSend.state === "drop" ? `${beforeSend.reason} (before sending)` : "changed before sending");
     }
     this.candidates.delete(agentId);
     try {
       await withTimeout(send(agentId, continuationText), this.timeoutMs);
+      this.say(`continuation sent agent=${who} turn=${short(candidate.turnId)} key=${shortKey(pending.key)}`);
     } catch {
-      // consumed already; never retried
+      this.say(`send failed agent=${who}, attempt already consumed, not retried`);
     }
   }
 

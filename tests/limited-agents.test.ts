@@ -40,8 +40,9 @@ function make(opts: { store?: RecoveryStore; resume?: { v: boolean }; account?: 
   const resume = opts.resume ?? { v: true };
   const account = opts.account ?? { v: "acct-A" };
   const clock = opts.clock ?? { t: 1000 };
-  const recovery = new LimitedAgentRecovery(store, async () => resume.v, async () => account.v, () => clock.t);
-  return { recovery, store, resume, account, clock };
+  const logs: string[] = [];
+  const recovery = new LimitedAgentRecovery(store, async () => resume.v, async () => account.v, () => clock.t, 30_000, (line) => void logs.push(line));
+  return { recovery, store, resume, account, clock, logs };
 }
 /** A limited turn ends for `id`, then the switch is adopted. */
 async function limit(r: ReturnType<typeof make>, id: string, turn = "t1", workspaceId = "w1") {
@@ -451,4 +452,163 @@ test("P9-1: without any invalidation a held save only delays the single continua
   store.release();
   await running;
   assert.equal(port.sends().length, 1);
+});
+
+// ---- plugin log: every decision leaves one greppable line, without secrets ----
+const PREFIX = "[subbaton] limited-agents:";
+const longAgent = (id: string) => `${id}-0123456789abcdef-0123456789abcdef`;
+const has = (r: ReturnType<typeof make>, text: RegExp) => r.logs.some((l) => text.test(l));
+function assertSafe(r: ReturnType<typeof make>) {
+  assert.ok(r.logs.length > 0);
+  for (const line of r.logs) {
+    assert.ok(line.startsWith(PREFIX), line);
+    assert.ok(!/\n/.test(line), "one line per decision");
+    assert.ok(!/(sk-[A-Za-z0-9]|Bearer|eyJ[A-Za-z0-9]|refresh|access_?token|auth\.json|password|secret|usage limit\.)/i.test(line), `no secrets or agent output: ${line}`);
+    assert.ok(!line.includes("0123456789abcdef-0123"), `agent IDs are shortened: ${line}`);
+    assert.ok(line.length < 300, line);
+  }
+}
+
+test("log: a limited agent that is continued once explains every step", async () => {
+  const r = make(), port = new Fake();
+  port.add(longAgent("agentA"));
+  await r.recovery.turnBefore(codexAgent(longAgent("agentA")), "turn-1");
+  await r.recovery.turnAfter(codexAgent(longAgent("agentA")), "turn-1", failed("whatever", "usage_limit_reached"));
+  r.clock.t += 10;
+  await adopt(r, "txn:T1");
+  await r.recovery.run(port);
+  const text = r.logs.join("\n");
+  assert.match(text, /limit detected agent=agentA-0 provider=codex via=code/);
+  assert.match(text, /switch adopted key=txn:T1 account=acct-A/);
+  assert.match(text, /attempt persisted agent=agentA-0/);
+  assert.match(text, /login recheck before reload ok account=acct-A/);
+  assert.match(text, /reload started agent=agentA-0/);
+  assert.match(text, /reload finished agent=agentA-0/);
+  assert.match(text, /login recheck after reload ok account=acct-A/);
+  assert.match(text, /continuation sent agent=agentA-0/);
+  assert.equal(r.logs.filter((l) => /continuation sent/.test(l)).length, 1);
+  assertSafe(r);
+  await r.recovery.run(port);
+  assert.equal(r.logs.filter((l) => /continuation sent/.test(l)).length, 1, "a second run logs nothing new to send");
+});
+
+test("log: text matches are named as text, and quotes or unrelated failures are not logged as detections", async () => {
+  const r = make();
+  await r.recovery.turnBefore(codexAgent("a"), "t1");
+  await r.recovery.turnAfter(codexAgent("a"), "t1", failed());
+  assert.ok(has(r, /limit detected agent=a provider=codex via=text/));
+  await r.recovery.turnBefore(codexAgent("b"), "t1");
+  await r.recovery.turnAfter(codexAgent("b"), "t1", failed("Network unreachable"));
+  assert.ok(!r.logs.some((l) => /agent=b/.test(l) && /detected/.test(l)));
+  assertSafe(r);
+});
+
+test("log: an agent the owner stopped or restarted is dropped with the reason", async () => {
+  const stopped = make(), port = new Fake();
+  port.add("a");
+  await limit(stopped, "a");
+  await stopped.recovery.turnAfter(codexAgent("a"), "t2", { kind: "canceled", reason: "user" });
+  await adopt(stopped);
+  await stopped.recovery.run(port);
+  assert.ok(has(stopped, /candidate dropped agent=a reason=canceled/));
+  assert.deepEqual(port.calls, []);
+  assertSafe(stopped);
+  const again = make();
+  await limit(again, "a");
+  await again.recovery.turnBefore(codexAgent("a"), "t2");
+  assert.ok(has(again, /candidate dropped agent=a reason=turn started again/));
+  const archived = make();
+  await limit(archived, "a");
+  await archived.recovery.archived("a");
+  assert.ok(has(archived, /candidate dropped agent=a reason=archived/));
+});
+
+test("log: a limit that ended after the switch (second exhausted account) is skipped with the reason", async () => {
+  const r = make(), port = new Fake();
+  port.add("a");
+  await adopt(r, "txn:T9");
+  await r.recovery.turnBefore(codexAgent("a"), "t1");
+  await r.recovery.turnAfter(codexAgent("a"), "t1", failed());
+  await r.recovery.run(port);
+  assert.ok(has(r, /skipped agent=a reason=limit ended after the switch/));
+  assert.ok(!has(r, /continuation sent/));
+  assertSafe(r);
+});
+
+test("log: a continuation that hit a limit again is suppressed, and the setting off is logged", async () => {
+  const r = make(), port = new Fake();
+  port.add("a");
+  await limit(r, "a");
+  await adopt(r);
+  await r.recovery.run(port);
+  await r.recovery.turnBefore(codexAgent("a"), "t2");
+  await r.recovery.turnAfter(codexAgent("a"), "t2", failed());
+  assert.ok(has(r, /continuation hit a limit again agent=a, suppressed until new activity/));
+  const off = make({ resume: { v: false } });
+  await off.recovery.turnBefore(codexAgent("a"), "t1");
+  await off.recovery.turnAfter(codexAgent("a"), "t1", failed());
+  assert.ok(has(off, /candidate not recorded agent=a reason=setting off/));
+  assertSafe(r);
+  assertSafe(off);
+});
+
+test("log: adoption is refused with the reason when the target is not the active login", async () => {
+  const r = make({ account: { v: "acct-C" } });
+  r.clock.t += 1;
+  await r.recovery.adopt("event:2", "acct-B");
+  assert.ok(has(r, /adoption refused key=event:2 reason=target acct-B is not the active login acct-C/));
+  await r.recovery.adopt("event:3", null as never);
+  assert.ok(has(r, /adoption refused key=event:3 reason=switch target unknown/));
+  assertSafe(r);
+});
+
+test("log: an untrusted state file is logged once and nothing is sent", async () => {
+  const broken: RecoveryStore = { load: async () => { throw new Error("EACCES /Users/x/secret.json"); }, save: async () => {} };
+  const r = make({ store: broken }), port = new Fake();
+  port.add("a");
+  await limit(r, "a");
+  await adopt(r);
+  await r.recovery.run(port);
+  assert.ok(has(r, /state file unreadable, continuation disabled until it is fixed/));
+  assert.equal(r.logs.filter((l) => /state file unreadable/.test(l)).length, 1);
+  assert.ok(!r.logs.some((l) => l.includes("secret.json") || l.includes("EACCES")), "error text is never logged");
+  assert.deepEqual(port.calls, []);
+  assertSafe(r);
+});
+
+test("log: reload and send failures, a login change and the consumed attempt are explained", async () => {
+  const failing = make(), port = new Fake();
+  port.add("a");
+  port.reloadFails.add("a");
+  await limit(failing, "a");
+  await adopt(failing);
+  await failing.recovery.run(port);
+  assert.ok(has(failing, /reload failed agent=a, attempt consumed, no message/));
+  await adopt(failing, "txn:1");
+  await failing.recovery.run(port);
+  assertSafe(failing);
+  const changed = make(), port2 = new Fake();
+  port2.add("a");
+  await limit(changed, "a");
+  await adopt(changed);
+  port2.onReload = () => { changed.account.v = "acct-C"; };
+  await changed.recovery.run(port2);
+  assert.ok(has(changed, /login recheck after reload failed agent=a, expected acct-A, active acct-C, no message/));
+  const consumed = make(), port3 = new Fake();
+  port3.add("a");
+  await limit(consumed, "a");
+  await adopt(consumed);
+  await consumed.recovery.run(port3);
+  consumed.logs.length = 0;
+  await adopt(consumed);
+  await consumed.recovery.run(port3);
+  assert.equal(consumed.logs.filter((l) => /continuation sent/.test(l)).length, 0);
+  const send = make(), port4 = new Fake();
+  port4.add("a");
+  port4.send = async () => { throw new Error("boom"); };
+  await limit(send, "a");
+  await adopt(send);
+  await send.recovery.run(port4);
+  assert.ok(has(send, /send failed agent=a, attempt already consumed/));
+  assertSafe(send);
 });

@@ -312,7 +312,7 @@ test("O-L3: an inactive agy account shows its own login state, not 'login renewe
   assert.equal(accountDetail("agy", inactive({ usageStatus: "needs-renewal" }), o).loginText, "needs renewal");
   assert.match(accountDetail("agy", inactive({ loginExpiresAt: NOW + 3600 }), o).loginText, /^access token valid until /);
   assert.equal(accountDetail("agy", inactive({ loginExpiresAt: NOW - 60 }), o).loginText, "needs renewal", "an expired access token needs renewal");
-  assert.equal(accountDetail("agy", inactive(), o).loginText, "renewed on switch or with Renew");
+  assert.equal(accountDetail("agy", inactive(), o).loginText, "renewed when SubBaton switches to it");
   assert.equal(accountDetail("codex", inactive(), o).loginText, "login has no fixed end date", "other providers are unchanged");
 });
 test("several other accounts can be open at once and the open state survives a status refresh", () => {

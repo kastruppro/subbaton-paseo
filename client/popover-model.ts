@@ -258,7 +258,7 @@ export function loginText(provider: Provider, account: Account, now = Date.now()
       return account.loginExpiresAt <= now
         ? "needs renewal"
         : `access token valid until ${new Date(account.loginExpiresAt * 1000).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`;
-    return "renewed on switch or with Renew";
+    return "renewed when SubBaton switches to it";
   }
   return account.loginExpiresAt != null
     ? `login valid until ${new Date(account.loginExpiresAt * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`

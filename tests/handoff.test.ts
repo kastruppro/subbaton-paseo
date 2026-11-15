@@ -949,3 +949,38 @@ test("codex: the shared daemon restart still waits for every agent to be idle", 
   assert.equal(cli.switches.length, 1);
   assert.deepEqual(agents.reloads.sort(), ["c1", "c3"]);
 });
+
+test("R4-L1: an automatic supersede with the reload setting off does not claim the old pending reloads are covered", async () => {
+  const settings: Partial<HandoffSettings> = {};
+  const { cli, agents, coordinator, advance } = setup(settings);
+  agents.agents = [agent("c1", "codex"), agent("c3", "codex", "running", true)];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  const first = coordinator.status().handoffs.codex!;
+  assert.equal(first.phase, "reopening");
+  settings.reloadCodexAfterAutomaticSwitch = false;
+  advance(61);
+  cli.events_ = [{ at: 1060, provider: "codex", kind: "automaticSwitch", target }];
+  await coordinator.tick(agents);
+  assert.equal(first.code, "superseded");
+  assert.match(first.message, /not reloaded/);
+  assert.doesNotMatch(first.message, /covers the remaining/);
+  assert.deepEqual(agents.reloads, ["c1"], "nothing reloads the running agent");
+});
+test("R4-L3: the daemon-pending fallback marks an overwritten reopening handoff as superseded", async () => {
+  const settings: Partial<HandoffSettings> = {};
+  const { cli, agents, coordinator, advance } = setup(settings);
+  agents.agents = [agent("c1", "codex"), agent("c3", "codex", "running", true)];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  const first = coordinator.status().handoffs.codex!;
+  assert.equal(first.phase, "reopening");
+  settings.restartCodexDaemon = true;
+  cli.daemonPending = true;
+  advance(61);
+  cli.events_ = [];
+  await coordinator.tick(agents);
+  assert.equal(first.code, "superseded");
+  assert.equal(first.phase, "done");
+  assert.equal(coordinator.status().handoffs.codex?.code === "daemonPending" || coordinator.status().handoffs.codex?.restartDaemon === true, true);
+});

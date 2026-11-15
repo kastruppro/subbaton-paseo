@@ -931,3 +931,22 @@ test("R3-M2: a candidate is parked, not dropped, when the login changed; the ado
   await r.recovery.run(port);
   assert.deepEqual(port.calls, ["reload:a", `send:a:${continuationText}`]);
 });
+
+test("R4-L2: a candidate parked after its attempt was consumed stays parked when the login returns without a new adoption", async () => {
+  const r = make(), port = new Fake();
+  port.add("a");
+  await limit(r, "a");
+  await adopt(r, "txn:1");
+  // the login changes while the reload runs: the attempt is consumed, nothing is sent, the candidate is parked
+  port.onReload = () => void (r.account.v = "acct-B");
+  await r.recovery.run(port);
+  assert.deepEqual(port.sends(), []);
+  port.onReload = null;
+  r.account.v = "acct-A"; // back to the same target, no new adoption
+  await r.recovery.run(port);
+  assert.ok(!has(r, /skipped agent=a reason=already consumed/), "not silently dropped");
+  assert.deepEqual(port.sends(), [], "the consumed attempt still prevents a second message for this switch");
+  await adopt(r, "txn:2");
+  await r.recovery.run(port);
+  assert.deepEqual(port.sends(), [`send:a:${continuationText}`]);
+});

@@ -285,7 +285,7 @@ export class HandoffCoordinator {
       const account = this.cli.knownAccount(provider, target);
       if (!account)
         return { result: refuse("unknownAccount", "Reload status and choose a known saved account."), handoff: current };
-      if (current && !terminal(current)) this.update(current, { phase: "done", code: "superseded", message: "A newer switch took over; its reload covers the remaining agents." });
+      if (current && !terminal(current)) this.supersede(current, true);
       const settings = await this.settings();
       const now = this.now();
       const handoff: Handoff = {
@@ -428,6 +428,17 @@ export class HandoffCoordinator {
     key = this.switchKey(key);
     this.state.handledSwitches = [...this.state.handledSwitches.filter((value) => value !== key), key].slice(-200);
   }
+  /** Ends an open handoff that a newer one takes over. Only claims coverage when the newer handoff will reload. */
+  private supersede(old: Handoff, newerReloads: boolean) {
+    const open = old.affected.filter((id) => !old.reopened.includes(id) && !old.failedReopen.includes(id)).length;
+    this.update(old, {
+      phase: "done",
+      code: "superseded",
+      message: newerReloads
+        ? "A newer switch took over; its reload covers the remaining agents."
+        : `A newer switch took over; reloading after automatic switches is off, so ${open} ${open === 1 ? "agent was" : "agents were"} not reloaded.`,
+    });
+  }
   private async pollEvents() {
     const open = this.state.handoffs.codex;
     if (this.now() - this.lastEventPoll < 60 || (!terminal(open) && !supersedable(open))) return;
@@ -445,7 +456,7 @@ export class HandoffCoordinator {
         for (const event of switches) this.rememberSwitch(event.transaction ? "txn:" + event.transaction : "event:" + (event.id ?? `${event.at}:${event.kind}`));
         if (unseen.length > 0) {
           const old = this.state.handoffs.codex;
-          if (old && !terminal(old)) this.update(old, { phase: "done", code: "superseded", message: "A newer switch took over; its reload covers the remaining agents." });
+          if (old && !terminal(old)) this.supersede(old, settings.reloadCodexAfterAutomaticSwitch);
           this.state.handoffs.codex = this.automaticCodex(
             settings,
             "queued",
@@ -466,6 +477,8 @@ export class HandoffCoordinator {
     // A failed attempt is not retried for 15 minutes, so a broken daemon is not restarted every minute.
     if (!settings.restartCodexDaemon || this.now() - this.lastDaemonAttempt < 900) return;
     if ((await this.cli.codexDaemonPending()) !== true) return;
+    const overwritten = this.state.handoffs.codex;
+    if (overwritten && !terminal(overwritten)) this.supersede(overwritten, settings.reloadCodexAfterAutomaticSwitch);
     this.state.handoffs.codex = { ...this.automaticCodex(settings, "daemonPending", "A Codex daemon restart is pending after a switch. Waiting until Paseo Codex agents are idle."), restartDaemon: true };
     await this.persist();
   }

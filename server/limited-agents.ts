@@ -345,7 +345,13 @@ export class LimitedAgentRecovery {
     };
     const id = `${pending.key}|${agentId}|${candidate.turnId}`;
     if (candidate.waiting && this.now() - candidate.at > waitingMaxAgeSeconds) return drop("waited longer than 7 days");
-    if (this.state.consumed.includes(id)) return drop("already consumed for this switch");
+    if (this.state.consumed.includes(id)) {
+      // A candidate that is still here after its attempt was consumed was parked (the login changed meanwhile and came
+      // back without a new adoption). It stays parked for the next adoption; the consumed key still prevents a second
+      // message for this switch.
+      if (!candidate.waiting) return drop("already consumed for this switch");
+      return this.logOnce(agentId, `used|${id}`, `waiting for the next switch agent=${who} reason=attempt already used for this switch`);
+    }
     const park = (message: string, tag: string) => {
       candidate.waiting = true;
       this.logOnce(agentId, tag, message);

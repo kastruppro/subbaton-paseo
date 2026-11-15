@@ -33,12 +33,10 @@ import {
   timestamp,
   windowPresentation,
   relativeAge,
-  lastRead,
   popoverBodyHeight,
   themePalette,
   keyboardFocus,
   providerNotices,
-  shortWarning,
 } from "./display.js";
 import {
   footerCell,
@@ -60,6 +58,9 @@ import {
   rowGlyph,
   bestPreviewLine,
   expandedSections,
+  accountDetail,
+  toggleOpenAccount,
+  pruneOpenAccounts,
   switchChoices,
   windowLabel,
   windowLongLabel,
@@ -68,7 +69,6 @@ import {
   type RowLine,
   type Tone,
 } from "./popover-model.js";
-import { attentionLine, paidUsageLines } from "./paid-model.js";
 import { useStatus } from "./use-status.js";
 import { useHandoff } from "./use-handoff.js";
 import { handoffLine } from "./handoff-model.js";
@@ -78,7 +78,7 @@ import {
   handoffSettings,
 } from "../shared/handoff.js";
 type Palette = ReturnType<typeof themePalette>;
-const PaletteContext = createContext<Palette | null>(null);
+export const PaletteContext = createContext<Palette | null>(null);
 function usePalette() {
   return useContext(PaletteContext)!;
 }
@@ -615,6 +615,60 @@ function Line({
     </View>
   );
 }
+/** The detail block of one account: identity and plan, every window, when it was read, login, credits and health. */
+export function AccountDetail({
+  provider,
+  account,
+  warning,
+  danger,
+  offline,
+}: {
+  provider: Provider;
+  account: Account;
+  warning: number;
+  danger: number;
+  offline: boolean;
+}) {
+  const palette = usePalette();
+  const d = accountDetail(provider, account, { warning, danger, offline });
+  return (
+    <>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
+        <Text selectable numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 1 }}>
+          {d.identity}
+        </Text>
+        {d.badge && <Badge {...d.badge} />}
+      </View>
+      {d.windows.map((w) => (
+        <PaceBar key={w.id} {...{ provider, window: w, warning, danger, offline }} />
+      ))}
+      {d.usageUnknown && (
+        <Text style={{ color: palette.muted, fontSize: 12 }}>Usage unknown. No quota is assumed.</Text>
+      )}
+      {d.gemini && <Text style={{ color: palette.muted, fontSize: 12, marginTop: 6 }}>{d.gemini}</Text>}
+      {d.warning && (
+        <View style={{ flexDirection: "row", gap: 4, alignItems: "center", marginTop: 4 }} accessibilityLabel={(account.warnings ?? []).join(". ")}>
+          <Icon name="TriangleAlert" size={12} color={palette.warning} />
+          <Text style={{ color: palette.warning, fontSize: 11, flex: 1 }}>{d.warning}</Text>
+        </View>
+      )}
+      <Text style={{ fontSize: 11.5, color: palette.muted, marginTop: 4 }} accessibilityLabel={`Last read ${relativeAge(d.readAt)} (${timestamp(d.readAt)}). Login ${timestamp(account.loginExpiresAt)}`}>
+        Read {relativeAge(d.readAt)} · {d.loginText}
+      </Text>
+      {d.attention && <Text style={{ fontSize: 11.5, color: palette.warning, marginTop: 2 }}>{d.attention}</Text>}
+      {d.paid.map((line) => (
+        <View key={line.label} style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
+          {line.stale && <Icon name="Clock" size={11} color={palette.muted} />}
+          <Text selectable accessibilityLabel={line.spoken} style={{ fontSize: 11.5, color: line.stale ? palette.muted : palette.text, flex: 1 }}>{line.text}</Text>
+        </View>
+      ))}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3, marginBottom: 8 }}>
+        <View style={{ width: 1.5, height: 10, backgroundColor: palette.tick, opacity: 0.75 }} />
+        <Text style={{ fontSize: 11, color: palette.faint }}>pace: where usage would be if spread evenly until the reset</Text>
+      </View>
+    </>
+  );
+}
 function ProviderRow({
   provider,
   status,
@@ -663,8 +717,11 @@ function ProviderRow({
     [details, setDetails] = useState(false),
     [bestNote, setBestNote] = useState<RowLine | null>(null),
     [previewing, setPreviewing] = useState(false),
-    [focused, setFocused] = useState(false);
+    [focused, setFocused] = useState(false),
+    [openOthers, setOpenOthers] = useState<string[]>([]);
   const accounts = status?.accounts ?? [];
+  // Several other accounts can be open at once; a status refresh keeps the ones that are still listed open.
+  const openIds = pruneOpenAccounts(openOthers, accounts);
   async function switchToBest() {
     if (provider === "claude")
       return void act(provider, () => strategy({ provider: "claude", strategy: "best" }));
@@ -695,18 +752,6 @@ function ProviderRow({
   const sections = expandedSections(provider, accounts, !!base?.disableSwitching);
   const others = sections.others;
   const chosen = others.find((a) => a.id === choice);
-  const read = current ? lastRead(current) : null;
-  const windowsAll = current?.windows ?? [];
-  const login =
-    current?.loginExpiresAt != null
-      ? `login valid until ${new Date(current.loginExpiresAt * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`
-      : provider === "codex"
-        ? "login has no fixed end date"
-        : provider === "agy"
-          ? "login renewed by agy"
-          : "login expiry unknown";
-  const badge = current ? accountBadge(current, warning, danger) : undefined;
-  const warnLine = current ? shortWarning(provider, current.summaryStatus, current.warnings) : null;
   return (
     <View
       style={{
@@ -783,43 +828,7 @@ function ProviderRow({
       )}
       {open && (current || others.length > 0) && !base?.disableSwitching && (
         <View style={{ paddingLeft: 31, paddingTop: 4 }}>
-          {current && (<>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
-            <Text selectable numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 1 }}>
-              {[current.email ?? "Email unknown", current.plan ?? "Plan unknown"].join(" · ")}
-            </Text>
-            {badge && <Badge {...badge} />}
-          </View>
-          {windowsAll.map((w) => (
-            <PaceBar key={w.id} {...{ provider, window: w, warning, danger, offline }} />
-          ))}
-          {windowsAll.length === 0 && (
-            <Text style={{ color: palette.muted, fontSize: 12 }}>Usage unknown. No quota is assumed.</Text>
-          )}
-          {geminiLine && <Text style={{ color: palette.muted, fontSize: 12, marginTop: 6 }}>{geminiLine.text}</Text>}
-          {warnLine && (
-            <View style={{ flexDirection: "row", gap: 4, alignItems: "center", marginTop: 4 }} accessibilityLabel={(current.warnings ?? []).join(". ")}>
-              <Icon name="TriangleAlert" size={12} color={palette.warning} />
-              <Text style={{ color: palette.warning, fontSize: 11, flex: 1 }}>{warnLine}</Text>
-            </View>
-          )}
-          <Text style={{ fontSize: 11.5, color: palette.muted, marginTop: 4 }} accessibilityLabel={`Last read ${relativeAge(read)} (${timestamp(read)}). Login ${timestamp(current.loginExpiresAt)}`}>
-            Read {relativeAge(read)} · {login}
-          </Text>
-          {attentionLine(current)?.text && (
-            <Text style={{ fontSize: 11.5, color: palette.warning, marginTop: 2 }}>{attentionLine(current)!.text}</Text>
-          )}
-          {paidUsageLines(provider, current).map((line) => (
-            <View key={line.label} style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
-              {line.stale && <Icon name="Clock" size={11} color={palette.muted} />}
-              <Text selectable accessibilityLabel={line.spoken} style={{ fontSize: 11.5, color: line.stale ? palette.muted : palette.text, flex: 1 }}>{line.text}</Text>
-            </View>
-          ))}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3, marginBottom: 8 }}>
-            <View style={{ width: 1.5, height: 10, backgroundColor: palette.tick, opacity: 0.75 }} />
-            <Text style={{ fontSize: 11, color: palette.faint }}>pace: where usage would be if spread evenly until the reset</Text>
-          </View>
-          </>)}
+          {current && <AccountDetail provider={provider} account={current} warning={warning} danger={danger} offline={offline} />}
           {others.length > 0 && (
             <Text style={{ fontSize: 11, letterSpacing: 0.4, color: palette.faint, marginBottom: 4 }}>
               OTHER ACCOUNTS
@@ -827,9 +836,19 @@ function ProviderRow({
           )}
           {others.map((account) => {
             const b = accountBadge(account, warning, danger);
+            const expanded = openIds.includes(account.id);
             return (
               <View key={account.id}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingVertical: 5, borderTopWidth: 1, borderTopColor: palette.line }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${expanded ? "Hide" : "Show"} details of ${account.alias}`}
+                    accessibilityState={{ expanded }}
+                    onPress={() => setOpenOthers((previous) => toggleOpenAccount(pruneOpenAccounts(previous, accounts), account.id))}
+                    style={{ minHeight: compact ? 44 : 20, minWidth: compact ? 28 : 16, justifyContent: "center" }}
+                  >
+                    <Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={14} color={palette.muted} />
+                  </Pressable>
                   <Glyph kind={rowGlyph(account, warning, danger)} />
                   <Text numberOfLines={1} style={{ fontSize: 12.5, color: palette.text, flexShrink: 1 }}>{account.alias}</Text>
                   <Text numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 1, fontVariant: ["tabular-nums"] }}>
@@ -855,6 +874,11 @@ function ProviderRow({
                     onPress={() => setChoice(choice === account.id ? null : account.id)}
                   />
                 </View>
+                {expanded && (
+                  <View style={{ paddingLeft: 21, paddingTop: 2, paddingBottom: 4 }}>
+                    <AccountDetail provider={provider} account={account} warning={warning} danger={danger} offline={offline} />
+                  </View>
+                )}
                 {chosen?.id === account.id && (
                   <View
                     accessibilityRole="alert"

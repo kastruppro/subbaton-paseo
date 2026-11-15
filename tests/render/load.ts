@@ -3,9 +3,16 @@ import { resolve } from "node:path";
 
 /** Bundles the real settings page for node with the plugin SDK replaced by small stand-ins, and returns renderPage. */
 export async function loadRenderer(): Promise<(doc: unknown, extra?: { status?: unknown }) => string> {
+  return (await bundle("tests/render/page.tsx")).renderPage as never;
+}
+/** The shared account detail block of the popover, rendered to static markup. */
+export async function loadDetailRenderer(): Promise<(provider: string, account: unknown, opts?: { warning?: number; danger?: number; offline?: boolean }) => string> {
+  return (await bundle("tests/render/detail.tsx")).renderDetail as never;
+}
+async function bundle(entry: string): Promise<Record<string, unknown>> {
   const root = resolve(import.meta.dirname, "../..");
   const out = await build({
-    entryPoints: [resolve(root, "tests/render/page.tsx")],
+    entryPoints: [resolve(root, entry)],
     bundle: true,
     write: false,
     platform: "node",
@@ -20,7 +27,7 @@ export async function loadRenderer(): Promise<(doc: unknown, extra?: { status?: 
     },
     nodePaths: [resolve(root, "node_modules")],
   });
-  const module = { exports: {} as { renderPage: (doc: unknown, extra?: { status?: unknown }) => string } };
+  const module = { exports: {} as Record<string, unknown> };
   new Function("module", "exports", "require", out.outputFiles[0]!.text)(module, module.exports, (await import("node:module")).createRequire(resolve(root, "package.json")));
-  return module.exports.renderPage;
+  return module.exports;
 }

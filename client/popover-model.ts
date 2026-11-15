@@ -7,7 +7,8 @@ import type {
 import type { StrategyPreview } from "../shared/contracts.js";
 import type { Handoff } from "../shared/handoff.js";
 import { activePhases } from "../shared/handoff.js";
-import { accountTone, providerLabel, severity, windowPresentation } from "./display.js";
+import { accountTone, lastRead, providerLabel, severity, shortWarning, windowPresentation } from "./display.js";
+import { attentionLine, paidUsageLines, type PaidLine } from "./paid-model.js";
 
 const groupName = (id: string) =>
   id.startsWith("gemini:") ? "Gemini" : id.startsWith("claude-gpt:") ? "C/GPT" : "";
@@ -246,4 +247,56 @@ export function geminiNotice(provider: Provider, account: Account): { text: stri
   if (account.windows.length === 0) return null;
   const has = account.windows.some((w) => w.id.startsWith("gemini:") || isModelQuota(w));
   return has ? null : { text: "Gemini: not available", tone: "muted" };
+}
+
+/** How the login of an account ends; the wording is shared by the active account and every other account. */
+export function loginText(provider: Provider, account: Account): string {
+  return account.loginExpiresAt != null
+    ? `login valid until ${new Date(account.loginExpiresAt * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`
+    : provider === "codex"
+      ? "login has no fixed end date"
+      : provider === "agy"
+        ? "login renewed by agy"
+        : "login expiry unknown";
+}
+export interface AccountDetailModel {
+  identity: string;
+  badge: ReturnType<typeof accountBadge>;
+  windows: Window[];
+  usageUnknown: boolean;
+  gemini: string | null;
+  warning: string | null;
+  readAt: number | null;
+  loginText: string;
+  attention: string | null;
+  paid: PaidLine[];
+}
+/** Everything the detail block shows for one account. The active account and every expanded other account use it. */
+export function accountDetail(
+  provider: Provider,
+  account: Account,
+  opts: { warning: number; danger: number; offline: boolean; now?: number },
+): AccountDetailModel {
+  const now = opts.now ?? Date.now() / 1000;
+  return {
+    identity: [account.email ?? "Email unknown", account.plan ?? "Plan unknown"].join(" · "),
+    badge: accountBadge(account, opts.warning, opts.danger, now),
+    windows: account.windows,
+    usageUnknown: account.windows.length === 0,
+    gemini: geminiNotice(provider, account)?.text ?? null,
+    warning: shortWarning(provider, account.summaryStatus, account.warnings),
+    readAt: lastRead(account),
+    loginText: loginText(provider, account),
+    attention: attentionLine(account, now)?.text ?? null,
+    paid: paidUsageLines(provider, account, now),
+  };
+}
+/** Several other accounts can be open at once; each id toggles on its own. */
+export function toggleOpenAccount(open: readonly string[], id: string): string[] {
+  return open.includes(id) ? open.filter((value) => value !== id) : [...open, id];
+}
+/** A status refresh keeps the accounts that are still there open and forgets the ones that disappeared. */
+export function pruneOpenAccounts(open: readonly string[], accounts: readonly Account[]): string[] {
+  const known = new Set(accounts.map((a) => a.id));
+  return open.filter((id) => known.has(id));
 }

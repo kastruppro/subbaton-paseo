@@ -23,6 +23,9 @@ import {
   bestPreviewLine,
   showBestSwitch,
   expandedSections,
+  accountDetail,
+  toggleOpenAccount,
+  pruneOpenAccounts,
 } from "../client/popover-model.js";
 
 const win = (id: string, patch: Partial<Window> = {}): Window => ({
@@ -269,4 +272,49 @@ test("PC2: other-account summary marks stale, passed-reset and estimated reading
     sum([win("five_hour", { usedPercent: 92, resetsAt: 1000 }), win("seven_day", { usedPercent: 77, resetsAt: 10 })]),
     "5h 92% · 7d —",
   );
+});
+
+// 0.9.7: other accounts expand into the same detail block the active account shows.
+const NOW = 1_800_000_000;
+const inactive = (patch: Partial<Account> = {}) => acct({
+  id: "inactive-1", alias: "Pro", email: "tobias@example.test", plan: "Pro", active: false, loginExpiresAt: null, usageStatus: "ok",
+  windows: [
+    win("codex:primary_window", { label: "5-hour", usedPercent: 40, resetsAt: NOW + 3600, fetchedAt: NOW - 600 }),
+    win("codex:secondary_window", { label: "Weekly", usedPercent: 100, resetsAt: NOW + 86400, fetchedAt: NOW - 90000, stale: true }),
+  ],
+  resetCreditsAvailable: 2,
+  paidUsage: { kind: "credits", fetchedAt: NOW - 60, stale: false, hasCredits: true, balance: "12.50" },
+  ...patch,
+});
+test("account detail: identity, every window, read time, login, credits, banked resets and health for an inactive account", () => {
+  const d = accountDetail("codex", inactive({ usageStatus: "needs-renewal", health: "attention", attentionSince: NOW - 7200 }), { warning: 80, danger: 100, offline: false, now: NOW });
+  assert.equal(d.identity, "tobias@example.test · Pro");
+  assert.deepEqual(d.windows.map((w) => w.id), ["codex:primary_window", "codex:secondary_window"]);
+  assert.equal(d.readAt, NOW - 600);
+  assert.match(d.loginText, /login has no fixed end date/);
+  assert.equal(d.badge?.text, "Login check failed");
+  assert.match(d.attention ?? "", /Login check failed · first seen/);
+  assert.ok(d.paid.some((l) => /Banked resets: 2/.test(l.text)));
+  assert.ok(d.paid.length >= 2, "credits and banked resets");
+  assert.equal(d.usageUnknown, false);
+});
+test("account detail: no windows says usage is unknown; unknown identity is spelled out; the same builder serves active and inactive", () => {
+  const d = accountDetail("claude", inactive({ email: null, plan: null, windows: [], paidUsage: undefined, resetCreditsAvailable: undefined }), { warning: 80, danger: 100, offline: false, now: NOW });
+  assert.equal(d.identity, "Email unknown · Plan unknown");
+  assert.equal(d.usageUnknown, true);
+  const a = accountDetail("codex", inactive({ active: true }), { warning: 80, danger: 100, offline: false, now: NOW });
+  const b = accountDetail("codex", inactive(), { warning: 80, danger: 100, offline: false, now: NOW });
+  assert.deepEqual({ ...a, badge: undefined }, { ...b, badge: undefined });
+});
+test("several other accounts can be open at once and the open state survives a status refresh", () => {
+  let open: string[] = [];
+  open = toggleOpenAccount(open, "a");
+  open = toggleOpenAccount(open, "b");
+  assert.deepEqual(open, ["a", "b"]);
+  // a refresh brings the same accounts again: nothing closes
+  assert.deepEqual(pruneOpenAccounts(open, [acct({ id: "a" }), acct({ id: "b" }), acct({ id: "c" })]), ["a", "b"]);
+  // an account that disappeared is forgotten, the others stay open
+  assert.deepEqual(pruneOpenAccounts(open, [acct({ id: "b" })]), ["b"]);
+  assert.deepEqual(toggleOpenAccount(open, "a"), ["b"]);
+  assert.deepEqual(toggleOpenAccount([], "a"), ["a"], "collapsed by default");
 });

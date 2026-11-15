@@ -52,3 +52,7 @@ export const legacyReachable = [
   "handoff-section", "codex-fields", "poller-status", "poller-lifecycle", "inactive-polling-fields",
   "notification-fields", "recent-events",
 ];
+
+/** Footer note: true next to the handoff section, which does reload agents. */
+export const displayNote = () =>
+  `Disable Paseo's built-in Claude/Codex usage sources to avoid duplicate polling. These display settings never reload agents; reloads are controlled under ${settingsSections.find((s) => s.id === "handoff")!.title}.`;

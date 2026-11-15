@@ -9,6 +9,7 @@ import {
   pageManifest,
   legacyReachable,
   providerFieldsBySection,
+  displayNote,
 } from "../client/settings-sections.js";
 import { claudeSection } from "./settings-fixtures.js";
 
@@ -76,4 +77,12 @@ test("everything that was reachable on the two old screens is on the single page
   assert.ok(pageManifest.auto.includes("auto-paused-resume") && pageManifest.auto.includes("auto-plan"));
   assert.ok(pageManifest.handoff.includes("handoff-section"));
   assert.ok(pageManifest.cli.includes("cli-binary"));
+});
+
+test("SP-1: the display note does not claim the plugin never reloads agents and points to the handoff section", () => {
+  const note = displayNote();
+  assert.ok(!/does not reload agents/i.test(note));
+  assert.match(note, /display settings never reload agents/);
+  assert.ok(note.includes("Codex & agy handoff"));
+  assert.match(note, /duplicate polling/);
 });

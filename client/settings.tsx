@@ -17,6 +17,7 @@ import { providerLabel, windowTitle } from "./display.js";
 import { maxFooterItems } from "../shared/contracts.js";
 import { useStatus } from "./use-status.js";
 import { PageSection } from "./page-section.js";
+import { displayNote } from "./settings-sections.js";
 function BinaryForm({
   initial,
   initialAllowPath,
@@ -202,9 +203,7 @@ export function DisplaySection(props: PluginSurfaceProps) {
         <SettingsAction label="Invalid saved display preferences" actionLabel="Reset to defaults" onPress={() => void display.reset()} />
       )}
       <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
-        Disable Paseo's built-in Claude/Codex usage sources to avoid duplicate
-        polling. This plugin does not reload agents. A later handoff must use
-        agent.reload(), not agent.refresh().
+        {displayNote()}
       </Text>
     </PageSection>
   );

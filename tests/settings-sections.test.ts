@@ -10,6 +10,10 @@ import {
   legacyReachable,
   providerFieldsBySection,
   displayNote,
+  providerSelectorNote,
+  hostWideParts,
+  pendingBarText,
+  pendingBarPlaces,
 } from "../client/settings-sections.js";
 import { claudeSection } from "./settings-fixtures.js";
 
@@ -85,4 +89,26 @@ test("SP-1: the display note does not claim the plugin never reloads agents and 
   assert.match(note, /display settings never reload agents/);
   assert.ok(note.includes("Codex & agy handoff"));
   assert.match(note, /duplicate polling/);
+});
+
+test("SP-2: the provider selector sentence names what follows it and what is host-wide", () => {
+  const note = providerSelectorNote();
+  assert.ok(!/show the provider chosen here/.test(note));
+  assert.match(note, /follow(s)? the provider chosen here/);
+  for (const word of ["accounts", "automatic switching", "plan", "inactive polling", "notification"]) assert.match(note.toLowerCase(), new RegExp(word));
+  for (const word of ["Add account", "handoff", "poller", "events"]) assert.match(note.toLowerCase(), new RegExp(word.toLowerCase()));
+  assert.match(note, /All providers/);
+  const onPage = new Set(Object.values(pageManifest).flat());
+  assert.deepEqual(hostWideParts, ["add-account", "handoff-section", "poller-status", "poller-lifecycle", "recent-events"]);
+  for (const part of hostWideParts) assert.ok(onPage.has(part), part);
+});
+
+test("SP-3: pending edits are announced at the top and at the end of every provider section", () => {
+  assert.deepEqual(pendingBarPlaces(0, 0), []);
+  assert.deepEqual(pendingBarPlaces(2, 0), ["selector", "accounts", "auto", "handoff", "poller", "events"]);
+  assert.deepEqual(pendingBarPlaces(0, 1), ["selector", "accounts", "auto", "handoff", "poller", "events"], "an invalid value alone also keeps the bar visible");
+  assert.equal(pendingBarText("Claude", 1, 0), "1 unapplied Claude change");
+  assert.equal(pendingBarText("Codex", 3, 0), "3 unapplied Codex changes");
+  assert.equal(pendingBarText("agy", 2, 1), "2 unapplied agy changes, 1 invalid value to fix first");
+  assert.equal(pendingBarText("agy", 0, 2), "2 invalid values to fix first");
 });

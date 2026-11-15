@@ -58,7 +58,7 @@ import { keyboardFocus, providerLabel, relativeAge, timestamp } from "./display.
 import { HandoffSection } from "./handoff-section.js";
 import { DisplaySection, CliSection } from "./settings.js";
 import { PageSection } from "./page-section.js";
-import { providerFieldsBySection, settingsSections, type SectionId } from "./settings-sections.js";
+import { hostWideLabel, pendingBarPlaces, pendingBarText, providerFieldsBySection, providerSelectorNote, settingsSections, type SectionId } from "./settings-sections.js";
 import { handoffRequestRpc, handoffSettings } from "../shared/handoff.js";
 import { handoffEffect } from "./handoff-model.js";
 
@@ -892,6 +892,35 @@ export function ControlScreen(props: PluginSurfaceProps) {
   const bin = binary.status === "ready" ? binary.values.binaryPath : "subbaton";
 
   const muted = colors.foregroundMuted;
+  const barPlaces = pendingBarPlaces(changes.length, invalidCount);
+  const hostWide = (children: ReactNode) => (
+    <View style={{ gap: 6 }}>
+      <Text accessibilityLabel={hostWideLabel} style={{ color: muted, fontSize: 12, fontWeight: "600" }}>{hostWideLabel}</Text>
+      {children}
+    </View>
+  );
+  function pendingBar(place: "selector" | SectionId): ReactNode {
+    if (!barPlaces.includes(place)) return null;
+    return (
+      <View
+        key={`pending-${place}`}
+        accessibilityLabel={pendingBarText(providerLabel[selected], changes.length, invalidCount)}
+        style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 8, borderRadius: 8, borderWidth: 1, borderColor: colors.accent }}
+      >
+        <Text style={{ color: colors.foreground }}>{pendingBarText(providerLabel[selected], changes.length, invalidCount)}</Text>
+        <Button label="Apply" tone="primary" colors={colors} disabled={!editable || invalidCount > 0} onPress={() => void apply()} />
+        <Button
+          label="Discard"
+          colors={colors}
+          disabled={busy}
+          onPress={() => {
+            clearDraft(selected);
+            setEpoch((n) => n + 1);
+          }}
+        />
+      </View>
+    );
+  }
   const pollerCard = (
     <View style={{ gap: 8 }}>
       <SettingsCard>
@@ -978,54 +1007,39 @@ export function ControlScreen(props: PluginSurfaceProps) {
       <DisplaySection {...props} />
       <View style={{ gap: 12 }}>
         <Text accessibilityRole="header" style={{ color: colors.foreground, fontWeight: "600" }}>Provider</Text>
-        <Text style={{ color: muted, fontSize: 12 }}>The sections below (Accounts to Notifications & events) show the provider chosen here.</Text>
+        <Text style={{ color: muted, fontSize: 12 }}>{providerSelectorNote()}</Text>
         {tabs}
         <Notice result={notices[selected] ?? null} colors={colors} />
-        {(changes.length > 0 || invalidCount > 0) && (
-          <View
-            accessibilityLabel={`${changes.length} pending ${providerLabel[selected]} changes`}
-            style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}
-          >
-            <Text style={{ color: colors.foreground }}>
-              {changes.length} pending change{changes.length === 1 ? "" : "s"}
-            </Text>
-            <Button label="Apply" tone="primary" colors={colors} disabled={!editable || invalidCount > 0} onPress={() => void apply()} />
-            {invalidCount > 0 && <Text style={{ color: colors.statusWarning }}>Fix {invalidCount} invalid value{invalidCount === 1 ? "" : "s"} first.</Text>}
-            <Button
-              label="Discard"
-              colors={colors}
-              disabled={busy}
-              onPress={() => {
-                clearDraft(selected);
-                setEpoch((n) => n + 1);
-              }}
-            />
-          </View>
-        )}
+        {pendingBar("selector")}
         {status}
         {newer}
         {notExists}
       </View>
       <PageSection id="accounts" muted={muted}>
         {accountsBlock}
-        {addAccount}
+        {hostWide(addAccount)}
+        {pendingBar("accounts")}
       </PageSection>
       <PageSection id="auto" muted={muted}>
         {pausedCard}
         {renderFields("auto")}
         {planBlock}
+        {pendingBar("auto")}
       </PageSection>
       <PageSection id="handoff" muted={muted}>
         {renderFields("handoff")}
-        <HandoffSection hostId={hostId} colors={colors} />
+        {hostWide(<HandoffSection hostId={hostId} colors={colors} />)}
+        {pendingBar("handoff")}
       </PageSection>
       <PageSection id="poller" muted={muted}>
         {renderFields("poller")}
-        {pollerCard}
+        {hostWide(pollerCard)}
+        {pendingBar("poller")}
       </PageSection>
       <PageSection id="events" muted={muted}>
         {renderFields("events")}
-        {eventsCard}
+        {hostWide(eventsCard)}
+        {pendingBar("events")}
       </PageSection>
       <CliSection {...props} />
       <View style={{ flexDirection: "row", gap: 8 }}>

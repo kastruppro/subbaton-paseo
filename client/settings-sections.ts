@@ -56,3 +56,19 @@ export const legacyReachable = [
 /** Footer note: true next to the handoff section, which does reload agents. */
 export const displayNote = () =>
   `Disable Paseo's built-in Claude/Codex usage sources to avoid duplicate polling. These display settings never reload agents; reloads are controlled under ${settingsSections.find((s) => s.id === "handoff")!.title}.`;
+
+/** Parts of the page that cover every provider on this host, whatever the provider selector says. */
+export const hostWideParts = ["add-account", "handoff-section", "poller-status", "poller-lifecycle", "recent-events"];
+export const hostWideLabel = "All providers on this host";
+export const providerSelectorNote = () =>
+  "Accounts, automatic switching (fields, plan and Credits fallback), the Codex daemon fields, inactive polling and notification fields follow the provider chosen here. Add account steps, handoff preferences, the poller status and Install/Uninstall, and recent events are marked All providers and cover this whole host.";
+
+/** One draft per provider; its Apply/Discard bar is repeated at the top and at the end of every provider section. */
+export const pendingBarText = (provider: string, changes: number, invalid: number) => {
+  const parts: string[] = [];
+  if (changes > 0) parts.push(`${changes} unapplied ${provider} change${changes === 1 ? "" : "s"}`);
+  if (invalid > 0) parts.push(`${invalid} invalid value${invalid === 1 ? "" : "s"} to fix first`);
+  return parts.join(", ");
+};
+export const pendingBarPlaces = (changes: number, invalid: number): ("selector" | SectionId)[] =>
+  changes > 0 || invalid > 0 ? ["selector", "accounts", "auto", "handoff", "poller", "events"] : [];

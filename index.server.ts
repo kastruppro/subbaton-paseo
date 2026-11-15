@@ -7,6 +7,7 @@ import {
   strategyRpc,
   strategyPreviewRpc,
   refreshRpc,
+  refreshAccountRpc,
 } from "./shared/contracts.js";
 import {
   settingsGetRpc,
@@ -44,6 +45,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(strategyRpc, (input) => service.strategy(input));
   server.handle(strategyPreviewRpc, (input) => service.strategyPreview(input));
   server.handle(refreshRpc, () => service.refresh());
+  server.handle(refreshAccountRpc, (input) => service.refreshAccount(input));
   server.handle(settingsGetRpc, (input) => service.settings(input));
   server.handle(settingsSetRpc, (input) => service.settingsSet(input));
   server.handle(settingsActionRpc, (input) => service.settingsAction(input));

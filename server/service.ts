@@ -37,7 +37,22 @@ import {
   type Provider,
   type StatusResult,
   type Account,
+  refreshAccountInput,
 } from "../shared/contracts.js";
+/** One result per provider: success when every account was read, otherwise the worst outcome with a short list of the accounts that were not. */
+function summarizeRefresh(outcomes: { alias: string; result: ActionResult }[]): ActionResult {
+  const bad = outcomes.filter((o) => o.result.outcome !== "success");
+  if (bad.length === 0) return outcomes[0]!.result;
+  const rank = { error: 3, uncertain: 2, unchanged: 1, success: 0 } as const;
+  const worst = bad.reduce((a, b) => (rank[b.result.outcome] > rank[a.result.outcome] ? b : a));
+  const list = bad.slice(0, 3).map((o) => `${o.alias}: ${o.result.message.replace(/\.$/, "")}`).join("; ");
+  const more = bad.length > 3 ? `; ${bad.length - 3} more` : "";
+  return {
+    outcome: worst.result.outcome,
+    code: worst.result.code,
+    message: `Read ${outcomes.length - bad.length} of ${outcomes.length} accounts. ${list}${more}.`.slice(0, 500),
+  };
+}
 export interface CliExecutor {
   run(
     binary: string,
@@ -442,6 +457,21 @@ export class SubBatonService {
     const status = await this.status();
     return status.data?.providers.find((p) => p.provider === provider)?.accounts.find((a) => a.id === id) ?? null;
   }
+  private refreshOne(provider: Provider, account: string): Promise<ActionResult> {
+    return this.mutation([...(provider === "claude" ? [] : [provider]), "usage", account, "--refresh"]);
+  }
+  /** One saved account's usage read, for the popover's per-account refresh. The account must be a known, enabled one of that provider. */
+  async refreshAccount(input: unknown): Promise<ActionResult> {
+    const parsed = refreshAccountInput.safeParse(input);
+    if (!parsed.success) return failure("invalidInput", "Choose a provider and a saved account.");
+    if (this.mutating) return failure("busy", "Another SubBaton action is running.");
+    const current = await this.status();
+    const account = current.data?.providers.find((p) => p.provider === parsed.data.provider)?.accounts.find((a) => a.id === parsed.data.account);
+    if (!account || !account.enabled) return failure("unknownAccount", "Reload status and choose a known, enabled account.");
+    const result = await this.refreshOne(parsed.data.provider, account.id);
+    this.invalidate();
+    return result;
+  }
   async refresh(): Promise<
     { provider: Provider | null; result: ActionResult }[]
   > {
@@ -457,19 +487,14 @@ export class SubBatonService {
       return [{ provider: null, result: current.error! }];
     const results: { provider: Provider | null; result: ActionResult }[] = [];
     for (const provider of current.data.providers) {
-      if (
-        provider.provider === "unknown" ||
-        !provider.accounts.some((a) => a.active)
-      )
-        continue;
-      results.push({
-        provider: provider.provider,
-        result: await this.mutation([
-          ...(provider.provider === "claude" ? [] : [provider.provider]),
-          "usage",
-          "--refresh",
-        ]),
-      });
+      if (provider.provider === "unknown") continue;
+      // Every enabled account is read, the active one first, one at a time. The CLI's own floor, backoff and health
+      // guards decide per account; one account's refusal never stops the others.
+      const accounts = provider.accounts.filter((a) => a.enabled).sort((x, y) => Number(y.active) - Number(x.active));
+      if (accounts.length === 0) continue;
+      const outcomes: { alias: string; result: ActionResult }[] = [];
+      for (const account of accounts) outcomes.push({ alias: account.alias, result: await this.refreshOne(provider.provider, account.id) });
+      results.push({ provider: provider.provider, result: summarizeRefresh(outcomes) });
     }
     this.invalidate();
     return results;

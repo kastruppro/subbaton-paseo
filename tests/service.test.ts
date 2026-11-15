@@ -92,7 +92,7 @@ test("refresh acts only on active providers and invalidates status cache", async
   await service.status();
   const result = await service.refresh();
   assert.equal(result.length, 1);
-  assert.deepEqual(cli.calls[1]?.argv, ["usage", "--refresh", "--json"]);
+  assert.deepEqual(cli.calls[1]?.argv, ["usage", accountId, "--refresh", "--json"]);
   await service.status();
   assert.deepEqual(cli.calls.at(-1)?.argv, ["status", "--json"]);
 });
@@ -215,4 +215,54 @@ test("best preview works for agy when the status knows the account", async () =>
   const r = await ctx.service.strategyPreview({ provider: "agy", strategy: "best" });
   assert.deepEqual(ctx.cli.calls.at(-1)?.argv, ["agy", "best", "--dry-run", "--json"]);
   assert.equal(r.outcome, "target");
+});
+
+// 0.9.6: refresh reads every enabled account, the active one first, one CLI call each.
+import { scripted, ok as okReply } from "./settings-fixtures.js";
+const acc = (id: string, alias: string, patch: Record<string, unknown> = {}) => ({ ...status.providers[0]!.accounts[0]!, id, alias, active: false, enabled: true, ...patch });
+const idA = "11111111-1111-4111-8111-111111111111", idB = "22222222-2222-4222-8222-222222222222", idC = "33333333-3333-4333-8333-333333333333", idD = "44444444-4444-4444-8444-444444444444";
+const multi = {
+  ...status,
+  providers: [
+    { ...status.providers[0], provider: "claude", accounts: [acc(idA, "c1", { active: true })] },
+    { ...status.providers[0], provider: "codex", accounts: [acc(idB, "x-other"), acc(idC, "x-active", { active: true }), acc(idD, "x-off", { enabled: false })] },
+  ],
+};
+const usageCalls = (cli: { calls: { argv: string[] }[] }) => cli.calls.map((c) => c.argv).filter((a) => a.includes("usage"));
+test("refresh-all issues one call per enabled account, the active one first, and skips disabled accounts", async () => {
+  const { cli, service } = scripted();
+  cli.on(["status"], okReply(multi));
+  cli.on((argv) => argv.includes("usage"), okReply({ status: "ok" }));
+  const results = await service.refresh();
+  assert.deepEqual(usageCalls(cli), [
+    ["usage", idA, "--refresh", "--json"],
+    ["codex", "usage", idC, "--refresh", "--json"],
+    ["codex", "usage", idB, "--refresh", "--json"],
+  ]);
+  assert.deepEqual(results.map((r) => [r.provider, r.result.outcome]), [["claude", "success"], ["codex", "success"]]);
+});
+test("a failure for one account does not stop the others and is reported briefly per provider", async () => {
+  const { cli, service } = scripted();
+  cli.on(["status"], okReply(multi));
+  cli.on((argv) => argv.includes("usage"), (argv) => okReply({ status: argv.includes(idC) ? "rate-limited" : "ok" }));
+  const results = await service.refresh();
+  assert.equal(usageCalls(cli).length, 3, "the other account is still read");
+  const codex = results.find((r) => r.provider === "codex")!;
+  assert.equal(codex.result.outcome, "unchanged");
+  assert.match(codex.result.message, /x-active/);
+  assert.match(codex.result.message, /1 of 2/);
+  assert.equal(results.find((r) => r.provider === "claude")!.result.outcome, "success");
+});
+test("the per-account refresh sends the right argv and refuses unknown, disabled or malformed accounts", async () => {
+  const { cli, service } = scripted();
+  cli.on(["status"], okReply(multi));
+  cli.on((argv) => argv.includes("usage"), okReply({ status: "ok" }));
+  assert.equal((await service.refreshAccount({ provider: "codex", account: idB })).outcome, "success");
+  assert.deepEqual(usageCalls(cli), [["codex", "usage", idB, "--refresh", "--json"]]);
+  assert.equal((await service.refreshAccount({ provider: "claude", account: idA })).outcome, "success");
+  assert.deepEqual(usageCalls(cli).at(-1), ["usage", idA, "--refresh", "--json"]);
+  const before = usageCalls(cli).length;
+  for (const input of [{ provider: "codex", account: idD }, { provider: "codex", account: "55555555-5555-4555-8555-555555555555" }, { provider: "codex", account: "--refresh" }, { provider: "claude", account: idB }])
+    assert.equal((await service.refreshAccount(input)).outcome, "error", JSON.stringify(input));
+  assert.equal(usageCalls(cli).length, before, "nothing was spawned");
 });

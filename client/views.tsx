@@ -19,6 +19,7 @@ import {
   strategyRpc,
   strategyPreviewRpc,
   refreshRpc,
+  refreshAccountRpc,
   type ActionResult,
   type Window,
   type Account,
@@ -656,7 +657,8 @@ function ProviderRow({
     strategy = useRpc(strategyRpc),
     previewBest = useRpc(strategyPreviewRpc),
     requestHandoff = useRpc(handoffRequestRpc),
-    controlHandoff = useRpc(handoffControlRpc);
+    controlHandoff = useRpc(handoffControlRpc),
+    refreshAccount = useRpc(refreshAccountRpc);
   const [choice, setChoice] = useState<string | null>(null),
     [details, setDetails] = useState(false),
     [bestNote, setBestNote] = useState<RowLine | null>(null),
@@ -835,6 +837,15 @@ function ProviderRow({
                   </Text>
                   {b && <Badge {...b} />}
                   <View style={{ flex: 1 }} />
+                  <Button
+                    small
+                    compact={compact}
+                    icon="RefreshCw"
+                    label="Refresh"
+                    a11yLabel={`Refresh usage of ${account.alias}`}
+                    disabled={busy || offline}
+                    onPress={() => void act(provider, () => refreshAccount({ provider, account: account.id }))}
+                  />
                   <Button
                     small
                     compact={compact}

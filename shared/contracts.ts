@@ -196,6 +196,12 @@ export const strategyPreviewRpc = defineRpc({
   input: strategyPreviewInput,
   output: strategyPreviewResult,
 });
+export const refreshAccountInput = z.object({ provider: providerSchema, account: z.uuid() });
+export const refreshAccountRpc = defineRpc({
+  name: "refresh.account",
+  input: refreshAccountInput,
+  output: actionSchema,
+});
 export const refreshRpc = defineRpc({
   name: "refresh",
   input: z.object({}),

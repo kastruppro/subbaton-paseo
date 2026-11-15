@@ -1,7 +1,7 @@
 {
   "name": "subbaton-paseo",
   "private": true,
-  "version": "0.9.3",
+  "version": "0.9.4",
   "type": "module",
   "scripts": {
     "test": "node --import tsx --test tests/*.test.ts",

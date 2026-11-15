@@ -33,7 +33,7 @@ export interface AgentPort {
   send?(id: string, text: string): Promise<void>;
 }
 /** notAllowed: an agy process outside the --only-pids list ran, nothing changed. notRun: auto run-once did nothing. */
-export type SwitchKind = "switched" | "unchanged" | "refused" | "notAllowed" | "notRun" | "stoppedFailed" | "uncertain" | "busy";
+export type SwitchKind = "switched" | "unchanged" | "refused" | "notAllowed" | "notRun" | "stoppedFailed" | "stoppedNoSwitch" | "uncertain" | "busy";
 export interface SwitchOutcome {
   kind: SwitchKind;
   code: string;
@@ -144,6 +144,8 @@ export class HandoffCoordinator {
   private state: HandoffState = { schemaVersion: 1, handoffs: { codex: null, agy: null }, eventWatermark: null, handledSwitches: [], notice: null };
   private ready: Promise<void> | null = null;
   private chain: Promise<unknown> = Promise.resolve();
+  /** Handoffs whose agy sessions were stopped for renewal without a switch (only the final message differs). */
+  private noSwitch = new Set<string>();
   private lastEventPoll = -Infinity;
   private lastAgyPlan = -Infinity;
   private agyRetryAt = -Infinity;
@@ -708,6 +710,19 @@ export class HandoffCoordinator {
           this.onCodexAdopted?.("txn:" + out.transaction, h.target, this.now());
         return;
       }
+      case "stoppedNoSwitch": {
+        // agy renewal before a switch stopped the sessions, then the final policy chose not to switch: nothing was
+        // switched, but the stopped sessions are resumed exactly as after a switch (agent.reload() reopens them).
+        this.noSwitch.add(h.id);
+        this.update(h, {
+          phase: affected.length > 0 ? "reopening" : "done",
+          deadline: this.now() + (await this.settings()).idleWaitMinutes * 60,
+          daemonOutcome,
+          code: "stoppedNoSwitch",
+          message: affected.length > 0 ? "agy sessions were stopped to renew candidate accounts; no switch was needed. Reopening agents with their saved conversations." : "agy sessions were stopped to renew candidate accounts; no switch was needed. No Paseo agents needed reopening.",
+        });
+        return;
+      }
       case "refused":
         // Review L4: nothing was closed, so there is nothing to reopen.
         this.update(h, { phase: "failed", affected: [], daemonOutcome, code: out.code, message: `${out.message} No agents were closed.` });
@@ -786,7 +801,9 @@ export class HandoffCoordinator {
       code: failed ? "reopenFailed" : "completed",
       message: failed
         ? `Reopened ${h.reopened.length}; ${failed} could not be reopened (archived, timed out or reload failed). Reopen them from Paseo.`
-        : `Done. Reopened ${h.reopened.length} ${h.reopened.length === 1 ? "agent" : "agents"} with the new login.`,
+        : this.noSwitch.has(h.id)
+          ? `Done. Reopened ${h.reopened.length} ${h.reopened.length === 1 ? "agent" : "agents"}; no switch was needed.`
+          : `Done. Reopened ${h.reopened.length} ${h.reopened.length === 1 ? "agent" : "agents"} with the new login.`,
     });
   }
 }

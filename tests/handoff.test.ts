@@ -139,6 +139,23 @@ test("agy: waits for idle, stops only via the CLI, switches, then reloads only t
   assert.deepEqual(h.affected, ["a1", "a2"]);
 });
 
+test("agy automatic: stoppedNoSwitch reopens the stopped agents like a switch, without a failure", async () => {
+  const { cli, agents, coordinator, advance } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [proc(11)];
+  cli.plan = { ok: true, blockedOnlyByProcesses: true, target };
+  cli.autoOutcome = { kind: "stoppedNoSwitch", code: "stoppedNoSwitch", message: "ok" };
+  advance(61);
+  await coordinator.tick(agents);
+  assert.deepEqual(cli.autoRuns, [[11]]);
+  assert.deepEqual(agents.reloads, ["a1"], "the stopped session is reopened with its saved conversation");
+  const h = coordinator.status().handoffs.agy!;
+  assert.equal(h.phase, "done");
+  assert.equal(h.code, "completed");
+  assert.match(h.message, /no switch/i);
+  assert.deepEqual(h.affected, ["a1"]);
+});
+
 test("agy: only processes descended from the Paseo daemon count; anything else waits (fail closed)", async () => {
   const cases: [AgentSnapshot[], AgyProcessInfo[] | null, string][] = [
     [[agent("a1", "antigravity")], [proc(11), proc(12, [900, 1])], "agyOutsidePaseo"],

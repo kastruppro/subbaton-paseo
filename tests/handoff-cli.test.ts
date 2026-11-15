@@ -128,6 +128,23 @@ test("agy auto plan and run-once: fixed argv and every outcome mapped", async ()
   assert.equal((await run(ok({ outcome: "failed", failure: "conflict", stoppedProcesses: [{ pid: 11 }] }))).kind, "stoppedFailed");
   assert.equal((await run(ok({ outcome: "revalidated", reason: "targetUnreadable" }))).kind, "notRun");
   assert.equal((await run(refused("uncertain", 2))).kind, "uncertain");
+  // 0.9.6: sessions stopped to renew candidates, then the final policy chose not to switch (real core shape).
+  const stoppedNoSwitch = {
+    outcome: "stoppedNoSwitch",
+    provider: "agy",
+    candidateRenewal: { renewed: 1, skipped: 0, failed: 1 },
+    stoppedProcesses: [{ pid: 11, conversationID: "160ad118-bc9f-450b-8564-1ebb0a19f07b", identity: "fixture", resumeCommand: "agy --conversation 160ad118-bc9f-450b-8564-1ebb0a19f07b" }],
+    resumeCommands: ["agy --conversation 160ad118-bc9f-450b-8564-1ebb0a19f07b"],
+    manualResumeRequired: false,
+  };
+  const noSwitch = await run(ok(stoppedNoSwitch));
+  assert.equal(noSwitch.kind, "stoppedNoSwitch");
+  assert.equal(noSwitch.code, "stoppedNoSwitch");
+  assert.notEqual(noSwitch.kind, "stoppedFailed");
+  assert.equal((await run(ok({ ...stoppedNoSwitch, manualResumeRequired: true }))).kind, "stoppedNoSwitch", "manual resume is the owner's, the Paseo agents are still reopened");
+  // no stopped session reported: nothing to resume and the outcome is not trusted
+  assert.equal((await run(ok({ ...stoppedNoSwitch, stoppedProcesses: [], resumeCommands: [] }))).kind, "uncertain");
+  assert.equal((await run(ok({ outcome: "uncertain", reason: "replanFailed", stoppedProcesses: stoppedNoSwitch.stoppedProcesses }))).kind, "uncertain");
 });
 
 test("codex daemon pending and restart: fixed argv, fail closed", async () => {

@@ -932,6 +932,12 @@ export class SubBatonService {
         }
         case "uncertain":
           return { kind: "uncertain", code: "uncertain", message: "The automatic switch result is uncertain." };
+        case "stoppedNoSwitch":
+          // 0.9.6: agy sessions were stopped to renew candidates, then the final policy chose not to switch. The
+          // sessions are resumed like after a switch; only a result that names the stopped sessions is trusted.
+          return stoppedAny
+            ? { kind: "stoppedNoSwitch", code: "stoppedNoSwitch", message: "agy sessions were stopped to renew candidate accounts; no switch was needed." }
+            : { kind: "uncertain", code: "uncertain", message: "Unexpected automatic switch result after stopping agy sessions." };
         default:
           // off, paused, held, stay, blocked, revalidated: the policy changed its mind; nothing ran.
           if (result.stopProcesses === true && stoppedAny)

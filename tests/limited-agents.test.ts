@@ -463,6 +463,7 @@ function assertSafe(r: ReturnType<typeof make>) {
   for (const line of r.logs) {
     assert.ok(line.startsWith(PREFIX), line);
     assert.ok(!/\n/.test(line), "one line per decision");
+    assert.ok(!/[\w.+-]+@[\w-]+\.[\w.-]+/.test(line), `no e-mail addresses or aliases like them: ${line}`);
     assert.ok(!/(sk-[A-Za-z0-9]|Bearer|eyJ[A-Za-z0-9]|refresh|access_?token|auth\.json|password|secret|usage limit\.)/i.test(line), `no secrets or agent output: ${line}`);
     assert.ok(!line.includes("0123456789abcdef-0123"), `agent IDs are shortened: ${line}`);
     assert.ok(line.length < 300, line);
@@ -611,4 +612,84 @@ test("log: reload and send failures, a login change and the consumed attempt are
   await send.recovery.run(port4);
   assert.ok(has(send, /send failed agent=a, attempt already consumed/));
   assertSafe(send);
+});
+
+test("LL-1: 'waiting' is logged once per pending agent, not on every run", async () => {
+  const r = make(), port = new Fake();
+  port.add("a", { status: "running", activeTurn: true });
+  await limit(r, "a");
+  await adopt(r, "txn:1");
+  for (let i = 0; i < 4; i++) await r.recovery.run(port);
+  const waiting = () => r.logs.filter((l) => /waiting agent=a/.test(l)).length;
+  assert.equal(waiting(), 1, "four runs while the turn is still running log one line");
+  port.agents.set("a", { id: "a", provider: "codex", status: "error", activeTurn: false });
+  await r.recovery.run(port);
+  assert.equal(r.logs.filter((l) => /continuation sent agent=a/.test(l)).length, 1);
+  assert.equal(waiting(), 1);
+  // a new candidate (new limit, new switch) that has to wait again is logged again
+  port.agents.set("a", { id: "a", provider: "codex", status: "running", activeTurn: true });
+  await r.recovery.turnBefore(codexAgent("a"), "t6"); // our continuation's turn ...
+  await r.recovery.turnAfter(codexAgent("a"), "t6", { kind: "completed" }); // ... ends normally
+  await limit(r, "a", "t7");
+  await adopt(r, "txn:2");
+  await r.recovery.run(port);
+  await r.recovery.run(port);
+  assert.equal(waiting(), 2);
+  // superseded by a newer switch while still waiting: the new key waits and logs once more
+  await adopt(r, "txn:3");
+  await r.recovery.run(port);
+  await r.recovery.run(port);
+  assert.equal(waiting(), 3);
+  assertSafe(r);
+});
+
+// ---- LL-2: a throwing logger changes nothing; realistic ids appear only in short form ----
+const uuid = (n: number) => `${String(n).padStart(8, "0")}-1111-4222-8333-${String(n).padStart(12, "0")}`;
+test("LL-2: a throwing logger changes neither the flow nor the persisted state", async () => {
+  const run = async (throwing: boolean) => {
+    const store = memoryStore();
+    const logs: string[] = [];
+    const clock = { t: 1000 };
+    const recovery = new LimitedAgentRecovery(store, async () => true, async () => "acct-A", () => clock.t, 30_000, (line) => {
+      logs.push(line);
+      if (throwing) throw new Error("logger exploded with a secret sk-abc");
+    });
+    const port = new Fake();
+    port.add("a");
+    await recovery.turnBefore(codexAgent("a"), "t1");
+    await recovery.turnAfter(codexAgent("a"), "t1", failed());
+    clock.t += 10;
+    await recovery.adopt("txn:1", "acct-A");
+    await recovery.run(port);
+    await recovery.run(port);
+    return { calls: port.calls, saved: JSON.stringify(store.saved), logs };
+  };
+  const quiet = await run(false);
+  const loud = await run(true);
+  assert.deepEqual(loud.calls, quiet.calls);
+  assert.equal(loud.saved, quiet.saved);
+  assert.equal(loud.calls.filter((c) => c.startsWith("send:")).length, 1);
+  assert.ok(loud.logs.length > 0, "the logger was still called");
+});
+
+test("LL-2: realistic UUID agent ids appear in the log only as the 8-character short form", async () => {
+  const r = make(), port = new Fake();
+  const ids = [uuid(1), uuid(2), uuid(3)];
+  for (const id of ids) port.add(id);
+  for (const id of ids) await limit(r, id, `turn-${id.slice(0, 4)}-${uuid(9)}`);
+  await r.recovery.turnBefore(codexAgent(ids[2]!), "t-new");
+  await adopt(r, `txn:${uuid(7)}`);
+  await r.recovery.run(port);
+  await r.recovery.archived(ids[1]!);
+  assert.ok(r.logs.length > 6);
+  for (const line of r.logs) {
+    for (const id of ids) {
+      assert.ok(!line.includes(id), `full agent id leaked: ${line}`);
+      assert.ok(!line.includes(id.slice(0, 13)), `agent id beyond the short form leaked: ${line}`);
+    }
+    assert.ok(!line.includes(uuid(9)), `full turn id leaked: ${line}`);
+    assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(line.replace(/account=acct-A/g, "")) || /account=|key=/.test(line), `unexpected UUID: ${line}`);
+  }
+  assert.ok(r.logs.some((l) => l.includes("agent=00000001")), "the short form is used");
+  assertSafe(r);
 });

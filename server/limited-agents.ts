@@ -78,6 +78,8 @@ export class LimitedAgentRecovery {
   /** run() and adopt() queue here. Hooks never wait for it: they must invalidate a candidate mid-run. */
   private chain: Promise<unknown> = Promise.resolve();
   private writes: Promise<unknown> = Promise.resolve();
+  /** Pending agent/switch/turn combinations whose "waiting" line was already logged. */
+  private waitLogged = new Set<string>();
 
   constructor(
     private store: RecoveryStore,
@@ -270,7 +272,15 @@ export class LimitedAgentRecovery {
     const id = `${pending.key}|${agentId}|${candidate.turnId}`;
     if (this.state.consumed.includes(id)) return drop("already consumed for this switch");
     const first = await this.eligible(port, pending, agentId, candidate, false);
-    if (first.state === "wait") return void this.say(`waiting agent=${who} reason=turn running`);
+    if (first.state === "wait") {
+      // Runs fire on every finished turn host-wide; log the wait once, again only after it resolved.
+      if (!this.waitLogged.has(id)) {
+        this.waitLogged.add(id);
+        this.say(`waiting agent=${who} reason=turn running`);
+      }
+      return;
+    }
+    this.waitLogged.delete(id);
     if (first.state === "drop") return drop(first.reason);
     this.say(`login recheck before reload ok account=${pending.accountId} agent=${who}`);
     // Every side effect is preceded by a fresh eligibility check made after the previous persistence

@@ -56,6 +56,9 @@ import {
 } from "./settings-model.js";
 import { keyboardFocus, providerLabel, relativeAge, timestamp } from "./display.js";
 import { HandoffSection } from "./handoff-section.js";
+import { DisplaySection, CliSection } from "./settings.js";
+import { PageSection } from "./page-section.js";
+import { providerFieldsBySection, settingsSections, type SectionId } from "./settings-sections.js";
 import { handoffRequestRpc, handoffSettings } from "../shared/handoff.js";
 import { handoffEffect } from "./handoff-model.js";
 
@@ -781,109 +784,106 @@ export function ControlScreen(props: PluginSurfaceProps) {
     </View>
   );
 
-  let body: ReactNode = null;
-  if (settings.isLoading) body = <Text style={{ color: colors.foregroundMuted }}>Loading settings…</Text>;
-  else if (settings.isError) body = <Text style={{ color: colors.statusWarning }}>The host did not answer. Check the Paseo connection and reload.</Text>;
-  else if (settings.data && !settings.data.ok) body = <Notice result={settings.data.error} colors={colors} />;
-  else if (section && !section.ok) body = <Notice result={section.error} colors={colors} />;
+  // Status lines and the per-section parts of the selected provider's CLI settings.
+  let status: ReactNode = null;
+  let pausedCard: ReactNode = null;
+  let accountsBlock: ReactNode = null;
+  let planBlock: ReactNode = null;
+  let notExists: ReactNode = null;
+  let newer: ReactNode = null;
+  let fieldsBySection = providerFieldsBySection([]);
+  const renderFields = (id: SectionId) =>
+    fieldsBySection[id].map((group) => (
+      <View key={group.title} style={{ gap: 6 }}>
+        <Text accessibilityRole="header" style={{ color: colors.foreground, fontWeight: "600" }}>{group.title}</Text>
+        <SettingsCard>
+          {group.fields.map((view) => (
+            <FieldControl key={view.key} view={view} error={view.field.path === "trustedExecutableOwners" && notices[selected]?.code === "invalidTrustedExecutableOwners" ? notices[selected]?.message : null} disabled={!editable} colors={colors} update={update} revisionKey={revisionKey} />
+          ))}
+        </SettingsCard>
+      </View>
+    ));
+  if (settings.isLoading) status = <Text style={{ color: colors.foregroundMuted }}>Loading settings…</Text>;
+  else if (settings.isError) status = <Text style={{ color: colors.statusWarning }}>The host did not answer. Check the Paseo connection and reload.</Text>;
+  else if (settings.data && !settings.data.ok) status = <Notice result={settings.data.error} colors={colors} />;
+  else if (section && !section.ok) status = <Notice result={section.error} colors={colors} />;
   else if (section?.ok) {
     const marks = changed[selected];
     const groups = providerGroups(section, draft, marks);
+    fieldsBySection = providerFieldsBySection(groups);
     const order = orderView(section, draft, marks);
-    body = (
-      <View style={{ gap: 16 }}>
-        {!section.exists && (
-          <Text style={{ color: colors.foregroundMuted }}>
-            No {providerLabel[section.provider]} accounts are saved yet. Defaults are shown read-only; add an account on the Mac first.
-          </Text>
-        )}
-        {section.newerSchema && (
-          <Text style={{ color: colors.statusWarning }}>These settings use a newer schema than this CLI supports. They are read-only until the CLI is updated.</Text>
-        )}
-        {section.auto.paused && (
+    if (!section.exists)
+      notExists = (
+        <Text style={{ color: colors.foregroundMuted }}>
+          No {providerLabel[section.provider]} accounts are saved yet. Defaults are shown read-only; add an account on the Mac first.
+        </Text>
+      );
+    if (section.newerSchema)
+      newer = <Text style={{ color: colors.statusWarning }}>These settings use a newer schema than this CLI supports. They are read-only until the CLI is updated.</Text>;
+    if (section.auto.paused)
+      pausedCard = (
+        <SettingsCard>
+          <SettingsAction
+            label="Automatic switching paused"
+            hint={`Reason: ${humanize(section.auto.pauseReason ?? "unknown")}${section.auto.pausedAt ? `, ${relativeAge(section.auto.pausedAt)}` : ""}.`}
+            actionLabel="Resume"
+            disabled={busy || !section.actions.includes("resumeAuto") || !section.auto.pauseId || changes.length > 0}
+            onPress={() =>
+              action(
+                { action: "resumeAuto", provider: section.provider, pauseId: section.auto.pauseId ?? "", expectedRevision: section.revision },
+                `Resume automatic switching for ${providerLabel[section.provider]}?`,
+                "Resume only after checking why it paused. Open the automatic plan below for details.",
+              )
+            }
+          />
+        </SettingsCard>
+      );
+    accountsBlock = (
+      <View style={{ gap: 12 }}>
+        {order && order.accounts.length > 1 && (
           <SettingsCard>
-            <SettingsAction
-              label="Automatic switching paused"
-              hint={`Reason: ${humanize(section.auto.pauseReason ?? "unknown")}${section.auto.pausedAt ? `, ${relativeAge(section.auto.pausedAt)}` : ""}.`}
-              actionLabel="Resume"
-              disabled={busy || !section.actions.includes("resumeAuto") || !section.auto.pauseId || changes.length > 0}
-              onPress={() =>
-                action(
-                  { action: "resumeAuto", provider: section.provider, pauseId: section.auto.pauseId ?? "", expectedRevision: section.revision },
-                  `Resume automatic switching for ${providerLabel[section.provider]}?`,
-                  "Resume only after checking why it paused. Open the automatic plan below for details.",
-                )
-              }
-            />
+            <SettingsRow label={order.field.title} hint={hintFor(order)} error={orderNotice[selected] ?? null} />
+            {order.accounts.map((account, index) => {
+              const ids = order.accounts.map((a) => a.id);
+              return (
+                <SettingsRow key={account.id} label={`${index + 1}. ${account.alias}`}>
+                  <View style={{ flexDirection: "row", gap: 6 }}>
+                    <Button label="Up" a11y={`Move ${account.alias} up`} colors={colors} disabled={!editable || index === 0} onPress={() => update(["order"], move(ids, index, -1))} />
+                    <Button label="Down" a11y={`Move ${account.alias} down`} colors={colors} disabled={!editable || index === ids.length - 1} onPress={() => update(["order"], move(ids, index, 1))} />
+                  </View>
+                </SettingsRow>
+              );
+            })}
           </SettingsCard>
         )}
-        {groups.map((group) => (
-          <SettingsSection key={group.title} title={group.title}>
-            <SettingsCard>
-              {group.fields.map((view) => (
-                <FieldControl key={view.key} view={view} error={view.field.path === "trustedExecutableOwners" && notices[selected]?.code === "invalidTrustedExecutableOwners" ? notices[selected]?.message : null} disabled={!editable} colors={colors} update={update} revisionKey={revisionKey} />
-              ))}
-            </SettingsCard>
-          </SettingsSection>
+        {section.accounts.map((account) => (
+          <AccountCard
+            key={account.id}
+            section={section}
+            account={account}
+            draft={draft}
+            disabled={!editable}
+            colors={colors}
+            update={update}
+            revisionKey={revisionKey}
+            action={action}
+            rename={async (input) => {
+              setBusy(true);
+              try {
+                const response = await runAction(input);
+                if (response.result.outcome === "success" || ["revisionConflict", "reloadSettings"].includes(response.result.code)) await reload();
+                return response.result;
+              } catch {
+                return { outcome: "error", code: "transport", message: "The request did not reach the host. Reload before retrying." };
+              } finally { setBusy(false); }
+            }}
+            changed={marks ?? new Set()}
+          />
         ))}
-        <SettingsSection title="Accounts">
-          {order && order.accounts.length > 1 && (
-            <SettingsCard>
-              <SettingsRow label={order.field.title} hint={hintFor(order)} error={orderNotice[selected] ?? null} />
-              {order.accounts.map((account, index) => {
-                const ids = order.accounts.map((a) => a.id);
-                return (
-                  <SettingsRow key={account.id} label={`${index + 1}. ${account.alias}`}>
-                    <View style={{ flexDirection: "row", gap: 6 }}>
-                      <Button
-                        label="Up"
-                        a11y={`Move ${account.alias} up`}
-                        colors={colors}
-                        disabled={!editable || index === 0}
-                        onPress={() => update(["order"], move(ids, index, -1))}
-                      />
-                      <Button
-                        label="Down"
-                        a11y={`Move ${account.alias} down`}
-                        colors={colors}
-                        disabled={!editable || index === ids.length - 1}
-                        onPress={() => update(["order"], move(ids, index, 1))}
-                      />
-                    </View>
-                  </SettingsRow>
-                );
-              })}
-            </SettingsCard>
-          )}
-          {section.accounts.map((account) => (
-            <AccountCard
-              key={account.id}
-              section={section}
-              account={account}
-              draft={draft}
-              disabled={!editable}
-              colors={colors}
-              update={update}
-              revisionKey={revisionKey}
-              action={action}
-              rename={async (input) => {
-                setBusy(true);
-                try {
-                  const response = await runAction(input);
-                  if (response.result.outcome === "success" || ["revisionConflict", "reloadSettings"].includes(response.result.code)) await reload();
-                  return response.result;
-                } catch {
-                  return { outcome: "error", code: "transport", message: "The request did not reach the host. Reload before retrying." };
-                } finally { setBusy(false); }
-              }}
-              changed={marks ?? new Set()}
-            />
-          ))}
-          {section.accounts.length === 0 && <Text style={{ color: colors.foregroundMuted }}>No saved accounts.</Text>}
-        </SettingsSection>
-        <PlanViewer provider={section.provider} colors={colors} />
+        {section.accounts.length === 0 && <Text style={{ color: colors.foregroundMuted }}>No saved accounts.</Text>}
       </View>
     );
+    planBlock = <PlanViewer provider={section.provider} colors={colors} />;
   }
 
   const pollerData = poller.data?.ok ? poller.data.data : null;
@@ -891,115 +891,143 @@ export function ControlScreen(props: PluginSurfaceProps) {
   const recent = events.data?.ok && events.data.data ? [...events.data.data.events].reverse().slice(0, 25) : [];
   const bin = binary.status === "ready" ? binary.values.binaryPath : "subbaton";
 
+  const muted = colors.foregroundMuted;
+  const pollerCard = (
+    <View style={{ gap: 8 }}>
+      <SettingsCard>
+        {pollerData ? (
+          <>
+            <SettingsRow
+              label={pollerData.installed ? "Installed" : "Not installed"}
+              hint={[
+                pollerData.loaded === null ? "Loaded state unknown." : pollerData.loaded ? "Loaded." : "Not loaded.",
+                `Last tick ${relativeAge(pollerData.lastTickAt)}${pollerData.lastTickAt ? ` (${timestamp(pollerData.lastTickAt)})` : ""}.`,
+                pollerData.stale ? "Stale: no recent tick." : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              {pollerData.stale && pollerData.installed && <Badge text="Stale" colors={colors} tone="warning" />}
+            </SettingsRow>
+            <SettingsRow label="Pinned provider homes" hint={pinnedText(pollerData.pinnedEnvironment, pollerData.installed)} />
+            {providers.map((p) => {
+              const row = pollerData.providers[p];
+              return row ? (
+                <SettingsRow
+                  key={p}
+                  label={providerLabel[p]}
+                  hint={[
+                    row.outcome ? `Usage ${humanize(row.outcome)}` : "",
+                    row.auto ? `automatic ${humanize(row.auto)}` : "",
+                    row.error ? `error ${humanize(row.error)}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}
+                />
+              ) : null;
+            })}
+          </>
+        ) : (
+          <SettingsRow label="Poller status" hint={poller.isLoading ? "Loading…" : (poller.data?.error?.message ?? "Unavailable.")} />
+        )}
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, padding: 12 }}>
+          <Button label={pollerData?.installed ? "Reinstall" : "Install"} colors={colors} disabled={busy} onPress={() => lifecycle(true)} />
+          <Button label="Uninstall" tone="danger" colors={colors} disabled={busy || pollerData?.installed === false} onPress={() => lifecycle(false)} />
+          <Button label="Refresh" colors={colors} onPress={() => void poller.refetch()} />
+        </View>
+      </SettingsCard>
+      <Notice result={notices.poller ?? null} colors={colors} />
+    </View>
+  );
+  const eventsCard = (
+    <SettingsCard>
+      {recent.length === 0 && (
+        <SettingsRow
+          label={events.data && !events.data.ok ? "Events unavailable" : "No events yet"}
+          hint={events.data && !events.data.ok ? events.data.error?.message : "Automatic switches, failures, pauses and login problems appear here."}
+        />
+      )}
+      {recent.map((event) => (
+        <SettingsRow
+          key={event.id}
+          label={eventSummary(event, aliases)}
+          hint={`${event.provider === "unknown" ? "Unknown provider" : providerLabel[event.provider]}, ${relativeAge(event.at)} (${timestamp(event.at)})`}
+        />
+      ))}
+    </SettingsCard>
+  );
+  const addAccount = (
+    <SettingsCard>
+      <SettingsRow
+        label="Logins happen on the Mac"
+        hint="Paseo never handles sign-in credentials. Use a terminal on the Mac that runs this host, signed in as the same user."
+      />
+      {providers.map((p) => (
+        <SettingsRow key={p} label={providerLabel[p]} hint={`1. ${loginSteps[p].signIn} 2. Run: "${bin}" ${loginSteps[p].add}`} />
+      ))}
+    </SettingsCard>
+  );
+
   return (
     <InvalidContext.Provider value={{ report, revert }}>
-    <View style={{ gap: 16 }}>
-      <Text style={{ color: colors.foregroundMuted }}>
-        Every value, rule and description below comes from the SubBaton CLI on this host. Changes are sent as one batch per provider with the
-        revision you loaded; if something changed elsewhere you will be asked to review and apply again.
+    <View style={{ gap: 20 }}>
+      <Text style={{ color: muted }}>
+        One page for the sidebar footer and every SubBaton setting. Provider values, rules and descriptions come from the SubBaton CLI on this host;
+        changes are sent as one batch per provider with the revision you loaded, and if something changed elsewhere you are asked to review and apply again.
       </Text>
-      {tabs}
-      <Notice result={notices[selected] ?? null} colors={colors} />
-      {(changes.length > 0 || invalidCount > 0) && (
-        <View
-          accessibilityLabel={`${changes.length} pending ${providerLabel[selected]} changes`}
-          style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}
-        >
-          <Text style={{ color: colors.foreground }}>
-            {changes.length} pending change{changes.length === 1 ? "" : "s"}
-          </Text>
-          <Button label="Apply" tone="primary" colors={colors} disabled={!editable || invalidCount > 0} onPress={() => void apply()} />
-          {invalidCount > 0 && <Text style={{ color: colors.statusWarning }}>Fix {invalidCount} invalid value{invalidCount === 1 ? "" : "s"} first.</Text>}
-          <Button
-            label="Discard"
-            colors={colors}
-            disabled={busy}
-            onPress={() => {
-              clearDraft(selected);
-              setEpoch((n) => n + 1);
-            }}
-          />
-        </View>
-      )}
-      {body}
-      <SettingsSection title="Usage poller">
-        <SettingsCard>
-          {pollerData ? (
-            <>
-              <SettingsRow
-                label={pollerData.installed ? "Installed" : "Not installed"}
-                hint={[
-                  pollerData.loaded === null ? "Loaded state unknown." : pollerData.loaded ? "Loaded." : "Not loaded.",
-                  `Last tick ${relativeAge(pollerData.lastTickAt)}${pollerData.lastTickAt ? ` (${timestamp(pollerData.lastTickAt)})` : ""}.`,
-                  pollerData.stale ? "Stale: no recent tick." : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-              >
-                {pollerData.stale && pollerData.installed && <Badge text="Stale" colors={colors} tone="warning" />}
-              </SettingsRow>
-              <SettingsRow label="Pinned provider homes" hint={pinnedText(pollerData.pinnedEnvironment, pollerData.installed)} />
-              {providers.map((p) => {
-                const row = pollerData.providers[p];
-                return row ? (
-                  <SettingsRow
-                    key={p}
-                    label={providerLabel[p]}
-                    hint={[
-                      row.outcome ? `Usage ${humanize(row.outcome)}` : "",
-                      row.auto ? `automatic ${humanize(row.auto)}` : "",
-                      row.error ? `error ${humanize(row.error)}` : "",
-                    ]
-                      .filter(Boolean)
-                      .join(", ")}
-                  />
-                ) : null;
-              })}
-            </>
-          ) : (
-            <SettingsRow label="Poller status" hint={poller.isLoading ? "Loading…" : (poller.data?.error?.message ?? "Unavailable.")} />
-          )}
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, padding: 12 }}>
-            <Button label={pollerData?.installed ? "Reinstall" : "Install"} colors={colors} disabled={busy} onPress={() => lifecycle(true)} />
-            <Button label="Uninstall" tone="danger" colors={colors} disabled={busy || pollerData?.installed === false} onPress={() => lifecycle(false)} />
-            <Button label="Refresh" colors={colors} onPress={() => void poller.refetch()} />
+      <DisplaySection {...props} />
+      <View style={{ gap: 12 }}>
+        <Text accessibilityRole="header" style={{ color: colors.foreground, fontWeight: "600" }}>Provider</Text>
+        <Text style={{ color: muted, fontSize: 12 }}>The sections below (Accounts to Notifications & events) show the provider chosen here.</Text>
+        {tabs}
+        <Notice result={notices[selected] ?? null} colors={colors} />
+        {(changes.length > 0 || invalidCount > 0) && (
+          <View
+            accessibilityLabel={`${changes.length} pending ${providerLabel[selected]} changes`}
+            style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}
+          >
+            <Text style={{ color: colors.foreground }}>
+              {changes.length} pending change{changes.length === 1 ? "" : "s"}
+            </Text>
+            <Button label="Apply" tone="primary" colors={colors} disabled={!editable || invalidCount > 0} onPress={() => void apply()} />
+            {invalidCount > 0 && <Text style={{ color: colors.statusWarning }}>Fix {invalidCount} invalid value{invalidCount === 1 ? "" : "s"} first.</Text>}
+            <Button
+              label="Discard"
+              colors={colors}
+              disabled={busy}
+              onPress={() => {
+                clearDraft(selected);
+                setEpoch((n) => n + 1);
+              }}
+            />
           </View>
-        </SettingsCard>
-        <Notice result={notices.poller ?? null} colors={colors} />
-      </SettingsSection>
-      <HandoffSection hostId={hostId} colors={colors} />
-      <SettingsSection title="Recent events">
-        <SettingsCard>
-          {recent.length === 0 && (
-            <SettingsRow
-              label={events.data && !events.data.ok ? "Events unavailable" : "No events yet"}
-              hint={events.data && !events.data.ok ? events.data.error?.message : "Automatic switches, failures, pauses and login problems appear here."}
-            />
-          )}
-          {recent.map((event) => (
-            <SettingsRow
-              key={event.id}
-              label={eventSummary(event, aliases)}
-              hint={`${event.provider === "unknown" ? "Unknown provider" : providerLabel[event.provider]}, ${relativeAge(event.at)} (${timestamp(event.at)})`}
-            />
-          ))}
-        </SettingsCard>
-      </SettingsSection>
-      <SettingsSection title="Add an account">
-        <SettingsCard>
-          <SettingsRow
-            label="Logins happen on the Mac"
-            hint="Paseo never handles sign-in credentials. Use a terminal on the Mac that runs this host, signed in as the same user."
-          />
-          {providers.map((p) => (
-            <SettingsRow
-              key={p}
-              label={providerLabel[p]}
-              hint={`1. ${loginSteps[p].signIn} 2. Run: "${bin}" ${loginSteps[p].add}`}
-            />
-          ))}
-        </SettingsCard>
-      </SettingsSection>
+        )}
+        {status}
+        {newer}
+        {notExists}
+      </View>
+      <PageSection id="accounts" muted={muted}>
+        {accountsBlock}
+        {addAccount}
+      </PageSection>
+      <PageSection id="auto" muted={muted}>
+        {pausedCard}
+        {renderFields("auto")}
+        {planBlock}
+      </PageSection>
+      <PageSection id="handoff" muted={muted}>
+        {renderFields("handoff")}
+        <HandoffSection hostId={hostId} colors={colors} />
+      </PageSection>
+      <PageSection id="poller" muted={muted}>
+        {renderFields("poller")}
+        {pollerCard}
+      </PageSection>
+      <PageSection id="events" muted={muted}>
+        {renderFields("events")}
+        {eventsCard}
+      </PageSection>
+      <CliSection {...props} />
       <View style={{ flexDirection: "row", gap: 8 }}>
         <Button label="Reload settings" colors={colors} disabled={busy} onPress={() => void reload()} />
       </View>

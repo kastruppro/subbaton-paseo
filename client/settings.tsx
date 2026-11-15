@@ -16,6 +16,7 @@ import {
 import { providerLabel, windowTitle } from "./display.js";
 import { maxFooterItems } from "../shared/contracts.js";
 import { useStatus } from "./use-status.js";
+import { PageSection } from "./page-section.js";
 function BinaryForm({
   initial,
   initialAllowPath,
@@ -91,9 +92,9 @@ function ThresholdForm({
     </SettingsCard>
   );
 }
-export function SettingsScreen(props: PluginSurfaceProps) {
-  const binary = useSettings(hostSettings),
-    display = useSettings(displaySettings),
+/** Section 1 of the settings page: which usage items the footer shows, and the colour thresholds. */
+export function DisplaySection(props: PluginSurfaceProps) {
+  const display = useSettings(displaySettings),
     query = useStatus(props.host.id),
     c = props.theme.colors;
   const options: DisplaySettings["items"] = [
@@ -124,36 +125,10 @@ export function SettingsScreen(props: PluginSurfaceProps) {
     new Map(options.map((v) => [`${v.provider}:${v.windowId}`, v])).values(),
   );
   return (
-    <View style={{ gap: 16 }}>
+    <PageSection id="display" muted={c.foregroundMuted}>
       <Text style={{ color: c.foregroundMuted }}>
-        Preferences apply to this host on every connected device. All strip
-        items follow the active account. Usage stays inside SubBaton.
+        Preferences apply to this host on every connected device. All footer items follow the active account. Usage stays inside SubBaton.
       </Text>
-      <SettingsSection title="CLI executable">
-        {binary.status === "ready" ? (
-          <BinaryForm
-            key={String(binary.revision)}
-            initial={binary.values.binaryPath}
-            initialAllowPath={binary.values.allowPathLookup}
-            busy={binary.saving}
-            save={(path, allowPathLookup) =>
-              binary.save(
-                { binaryPath: path, allowPathLookup },
-                binary.revision,
-              )
-            }
-          />
-        ) : (
-          <Text style={{ color: c.statusWarning }}>
-            Binary settings {binary.status}
-          </Text>
-        )}
-        {binary.saveError && (
-          <Text style={{ color: c.statusWarning }}>
-            Could not save. Reload settings and try again.
-          </Text>
-        )}
-      </SettingsSection>
       <SettingsSection title="Always visible items">
         {display.status === "ready" ? (
           <SettingsCard>
@@ -222,29 +197,45 @@ export function SettingsScreen(props: PluginSurfaceProps) {
           Save failed or conflicted. Reload before editing again.
         </Text>
       )}
-      <SettingsAction
-        label="Reload preferences"
-        actionLabel="Reload"
-        onPress={() => {
-          void binary.reload();
-          void display.reload();
-        }}
-      />
-      {(binary.status === "invalid" || display.status === "invalid") && (
-        <SettingsAction
-          label="Invalid saved preferences"
-          actionLabel="Reset to defaults"
-          onPress={() => {
-            if (binary.status === "invalid") void binary.reset();
-            if (display.status === "invalid") void display.reset();
-          }}
-        />
+      <SettingsAction label="Reload display preferences" actionLabel="Reload" onPress={() => void display.reload()} />
+      {display.status === "invalid" && (
+        <SettingsAction label="Invalid saved display preferences" actionLabel="Reset to defaults" onPress={() => void display.reset()} />
       )}
       <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
         Disable Paseo's built-in Claude/Codex usage sources to avoid duplicate
         polling. This plugin does not reload agents. A later handoff must use
         agent.reload(), not agent.refresh().
       </Text>
-    </View>
+    </PageSection>
+  );
+}
+
+/** Last section of the settings page: the verified SubBaton executable this host runs. */
+export function CliSection(props: PluginSurfaceProps) {
+  const binary = useSettings(hostSettings),
+    c = props.theme.colors;
+  return (
+    <PageSection id="cli" muted={c.foregroundMuted}>
+      {binary.status === "ready" ? (
+        <BinaryForm
+          key={String(binary.revision)}
+          initial={binary.values.binaryPath}
+          initialAllowPath={binary.values.allowPathLookup}
+          busy={binary.saving}
+          save={(path, allowPathLookup) =>
+            binary.save({ binaryPath: path, allowPathLookup }, binary.revision)
+          }
+        />
+      ) : (
+        <Text style={{ color: c.statusWarning }}>Binary settings {binary.status}</Text>
+      )}
+      {binary.saveError && (
+        <Text style={{ color: c.statusWarning }}>Could not save. Reload settings and try again.</Text>
+      )}
+      <SettingsAction label="Reload CLI settings" actionLabel="Reload" onPress={() => void binary.reload()} />
+      {binary.status === "invalid" && (
+        <SettingsAction label="Invalid saved CLI settings" actionLabel="Reset to defaults" onPress={() => void binary.reset()} />
+      )}
+    </PageSection>
   );
 }

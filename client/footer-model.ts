@@ -150,5 +150,5 @@ export function footerSpeech(provider: Provider, cell: FooterCell): string {
   const number = cell.percent.replace(/^[~≈]/, "").replace("%", "");
   if (stale) return `${subject}, about ${number} percent used, stale`;
   if (estimated) return `${subject}, about ${number} percent used, estimated`;
-  return `${subject}, ${number} percent used${cell.textTone === "warning" ? ", near limit" : ""}`;
+  return `${subject}, ${number} percent used${cell.textTone === "warning" ? ", near limit" : cell.textTone === "danger" ? ", over the danger threshold" : ""}`;
 }

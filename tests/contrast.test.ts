@@ -95,3 +95,12 @@ test("FC-2: every footer cell has a spoken label naming stale, unknown, near lim
   const none = footerCell({ provider: "claude", windowId: "paid", account: acct(), window: null }, { warning: 80, danger: 100, offline: false, narrow: false, now: 50 });
   assert.equal(footerSpeech("claude", none), "Claude extra usage, unknown");
 });
+
+test("a custom danger threshold below 100 is spoken like it is shown", () => {
+  const custom = (value: number) =>
+    footerSpeech("claude", footerCell({ provider: "claude", windowId: "five_hour", account: acct(), window: win({ usedPercent: value }) }, { warning: 75, danger: 90, offline: false, narrow: false, now: 50 }));
+  assert.equal(custom(50), "Claude 5 hours, 50 percent used");
+  assert.equal(custom(80), "Claude 5 hours, 80 percent used, near limit");
+  assert.equal(custom(96), "Claude 5 hours, 96 percent used, over the danger threshold");
+  assert.equal(custom(100), "Claude 5 hours, 100 percent used, exhausted");
+});

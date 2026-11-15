@@ -4,7 +4,6 @@ import type {
   PluginSidebarItemProps,
 } from "@getpaseo/plugin/client";
 import { AccountPopover, Footer } from "./client/views.js";
-import { SettingsScreen } from "./client/settings.js";
 import { ControlScreen } from "./client/control.js";
 import { subbatonMark } from "./client/icons.js";
 export default function contribute(client: PluginClientContext) {
@@ -12,7 +11,7 @@ export default function contribute(client: PluginClientContext) {
     return (
       <AccountPopover
         {...props}
-        openSettings={() => client.openSettings("preferences")}
+        openSettings={() => client.openSettings("subbaton")}
       />
     );
   }
@@ -24,21 +23,14 @@ export default function contribute(client: PluginClientContext) {
     title: "SubBaton usage",
     Component: Strip,
   });
-  const removeSettings = client.addSettingsScreen({
-    id: "preferences",
-    title: "Usage display",
-    icon: "Gauge",
-    Component: SettingsScreen,
-  });
   const removeControl = client.addSettingsScreen({
-    id: "control",
-    title: "SubBaton settings",
+    id: "subbaton",
+    title: "SubBaton",
     icon: { svg: subbatonMark },
     Component: ControlScreen,
   });
   return () => {
     removeFooter();
-    removeSettings();
     removeControl();
   };
 }

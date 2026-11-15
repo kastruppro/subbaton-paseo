@@ -81,5 +81,52 @@ test("host wiring registers the RPCs, uses the context's agent API and nudges on
   assert.ok(saved);
   assert.equal(((await handlers.get("handoff.request")!({ provider: "claude", target }, {})) as { result: { code: string } }).result.code, "invalidInput");
   host.cleanup();
-  assert.equal(removed, 1);
+  assert.equal(removed, 3);
+});
+
+test("host wiring continues a limited Codex agent once after a verified switch with a daemon restart", async () => {
+  const { cli, service } = scripted();
+  cli.on(["status"], ok({ ...status, providers: [{ ...status.providers[0], provider: "codex" }] }));
+  await service.status();
+  cli.on(["codex", "switch"], ok({ outcome: "switched", postSwitchVerification: "verified", daemonOutcome: "restarted", transaction: "T1" }));
+  const handlers = new Map<string, (input: unknown, context: unknown) => unknown>();
+  const hooks = new Map<string, (event: unknown, context: unknown) => Promise<void>>();
+  const calls: string[] = [];
+  let agentStatus = "error";
+  const paseo = {
+    agents: {
+      async list() {
+        return { entries: [{ agent: { id: "c1", provider: "codex", status: agentStatus, activeTurn: null } }], pageInfo: { hasMore: false, nextCursor: null } };
+      },
+      ref: (id: string) => ({
+        reload: async () => { calls.push(`reload:${id}`); agentStatus = "idle"; },
+        send: async (text: string) => void calls.push(`send:${id}:${text}`),
+      }),
+    },
+  };
+  const settingsValue = { reloadCodexAfterAutomaticSwitch: false, restartCodexDaemon: true, idleWaitMinutes: 30, resumeLimitedCodexAgents: true };
+  const host = registerHandoff(
+    {
+      registerSettings: (() => ({ read: async () => ({ status: "ready", revision: "1", values: settingsValue }), subscribe: () => () => {} })) as never,
+      handle: ((contract: { name: string }, handler: (input: unknown, context: unknown) => unknown) => handlers.set(contract.name, handler)) as never,
+      addHook: ((name: string, handler: (event: unknown, context: unknown) => Promise<void>) => { hooks.set(name, handler); return () => {}; }) as never,
+    },
+    service,
+    { load: async () => null, save: async () => {} },
+    60_000,
+    { load: async () => null, save: async () => {} },
+  );
+  const agent = { id: "c1", provider: "codex", workspaceId: "w-other" };
+  await hooks.get("agent.turn.before")!({ agent, turnId: "t1" }, { paseo });
+  await hooks.get("agent.turn.after")!({ agent, turnId: "t1", outcome: { kind: "failed", error: { message: "You've hit your usage limit." } } }, { paseo });
+  await new Promise((r) => setTimeout(r, 5));
+  await handlers.get("handoff.request")!({ provider: "codex", target }, { paseo });
+  await host.coordinator.tick(host.capture({ paseo }));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(calls, ["reload:c1", "send:c1:Continue the previous task from where it stopped because of the usage limit."]);
+  // a duplicate nudge never sends again
+  await hooks.get("agent.turn.after")!({ agent: { ...agent, id: "other" }, turnId: "x", outcome: { kind: "completed" } }, { paseo });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(calls.filter((c) => c.startsWith("send:")).length, 1);
+  host.cleanup();
 });

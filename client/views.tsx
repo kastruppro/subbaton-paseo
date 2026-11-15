@@ -63,6 +63,7 @@ import {
   type RowLine,
   type Tone,
 } from "./popover-model.js";
+import { attentionLine, paidUsageLines } from "./paid-model.js";
 import { useStatus } from "./use-status.js";
 import { useHandoff } from "./use-handoff.js";
 import { handoffLine } from "./handoff-model.js";
@@ -159,7 +160,9 @@ function FooterCellView({
       <Text numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 0 }}>
         {cell.label}
       </Text>
-      {cell.kind === "blocked" ? (
+      {!cell.meter ? (
+        <View style={{ flex: 1, minWidth: 0 }} />
+      ) : cell.kind === "blocked" ? (
         <View style={{ flex: 1, minWidth: 9, alignItems: "center" }}>
           <Text style={{ fontSize: 10, color: palette.danger }}>▲</Text>
         </View>
@@ -170,6 +173,7 @@ function FooterCellView({
       ) : (
         <MiniMeter fill={cell.fill} tone={cell.tone} />
       )}
+      {!cell.meter && cell.clock && <Icon name="Clock" size={11} color={palette.muted} />}
       {!(cell.kind === "blocked" && cell.percent === "—") && (
         <Text
           numberOfLines={1}
@@ -796,6 +800,15 @@ function ProviderRow({
           <Text style={{ fontSize: 11.5, color: palette.muted, marginTop: 4 }} accessibilityLabel={`Last read ${relativeAge(read)} (${timestamp(read)}). Login ${timestamp(current.loginExpiresAt)}`}>
             Read {relativeAge(read)} · {login}
           </Text>
+          {attentionLine(current)?.text && (
+            <Text style={{ fontSize: 11.5, color: palette.warning, marginTop: 2 }}>{attentionLine(current)!.text}</Text>
+          )}
+          {paidUsageLines(provider, current).map((line) => (
+            <View key={line.label} style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
+              {line.stale && <Icon name="Clock" size={11} color={palette.muted} />}
+              <Text selectable style={{ fontSize: 11.5, color: line.stale ? palette.muted : palette.text, flex: 1 }}>{line.text}</Text>
+            </View>
+          ))}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3, marginBottom: 8 }}>
             <View style={{ width: 1.5, height: 10, backgroundColor: palette.tick, opacity: 0.75 }} />
             <Text style={{ fontSize: 11, color: palette.faint }}>pace: where usage would be if spread evenly until the reset</Text>

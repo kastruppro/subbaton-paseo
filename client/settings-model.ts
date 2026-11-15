@@ -129,7 +129,7 @@ export const groupOrder = [
 export type GroupTitle = (typeof groupOrder)[number];
 export function groupFor(path: string): GroupTitle {
   if (["daemonAutoRestart", "trustedExecutableOwners"].includes(path)) return "Codex";
-  if (["autoEnabled", "strategy", "cooldownMinutes", "improvementMargin"].includes(path)) return "Automatic switching";
+  if (["autoEnabled", "strategy", "cooldownMinutes", "improvementMargin", "creditsFallback", "auto.creditsFallback"].includes(path)) return "Automatic switching";
   if (path.startsWith("thresholds.")) return "Thresholds";
   if (path.startsWith("weeklyResetPriority.")) return "Weekly reset priority";
   if (path === "inactiveIntervalHours") return "Inactive polling";
@@ -345,3 +345,9 @@ export function autoEnabledChanges(draft: Draft): boolean[] {
 
 
 export const parseOwnerNames = (text: string): string[] => text === "" ? [] : text.split(",").map((name) => name.trim());
+
+/** Title and help for the 0.9.0 provider setting auto.creditsFallback (Claude and Codex only). */
+export const isCreditsFallback = (path: string) => path === "creditsFallback" || path === "auto.creditsFallback";
+export const creditsFallbackTitle = (on: boolean) => `Credits fallback: ${on ? "On" : "Off"}`;
+export const creditsFallbackHelp = () =>
+  "When no account has subscription headroom left, SubBaton may switch to an account that can use paid credits. The official CLI may automatically consume paid usage on that account. Subscription headroom always comes first.";

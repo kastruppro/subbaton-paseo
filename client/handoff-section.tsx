@@ -107,6 +107,13 @@ export function HandoffSection({ hostId, colors }: { hostId: string; colors: Col
             onValueChange={(value) => void prefs.save({ ...prefs.values, restartCodexDaemon: value }, prefs.revision)}
           />
           <SettingsSwitch
+            label="Continue Codex agents that hit a usage limit"
+            hint="On by default, for every workspace on this host. After a verified Codex switch and a successful daemon restart, Paseo Codex agents whose latest turn ended in a usage limit get one message: continue the previous task. It never turns the daemon restart on by itself; with the restart off nothing is continued."
+            value={prefs.values.resumeLimitedCodexAgents}
+            disabled={prefs.saving}
+            onValueChange={(value) => void prefs.save({ ...prefs.values, resumeLimitedCodexAgents: value }, prefs.revision)}
+          />
+          <SettingsSwitch
             label="Let automatic agy switches close idle Paseo agy agents"
             hint="When running agy sessions are the only thing blocking an automatic agy switch, close Paseo's own idle agy agents, switch and reopen them. Terminal and desktop agy sessions are never stopped."
             value={prefs.values.closeAgyForAutomaticSwitch}

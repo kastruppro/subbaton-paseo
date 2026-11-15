@@ -430,6 +430,12 @@ export class SubBatonService {
       this.mutating = false;
     }
   }
+  /** The active saved account of a provider, from a fresh cache-only status read; null when unknown. */
+  async activeAccount(provider: Provider): Promise<string | null> {
+    this.invalidate();
+    const status = await this.status();
+    return status.data?.providers.find((p) => p.provider === provider)?.accounts.find((a) => a.active)?.id ?? null;
+  }
   async refresh(): Promise<
     { provider: Provider | null; result: ActionResult }[]
   > {

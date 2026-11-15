@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "result": {
+    "providers": [
+      {
+        "provider": "claude",
+        "cacheStatus": "available",
+        "updatedAt": 1800000000,
+        "auto": {
+          "enabled": true,
+          "paused": false,
+          "lastAutomaticSwitchAt": null
+        },
+        "accounts": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "alias": "fixture",
+            "active": true,
+            "enabled": true,
+            "health": "ok",
+            "usageStatus": "ok",
+            "windows": [],
+            "paidUsage": {
+              "kind": "extraUsage",
+              "fetchedAt": 1800000000,
+              "stale": false,
+              "enabled": true,
+              "usedCredits": 120,
+              "monthlyLimit": 500,
+              "utilization": 24,
+              "currency": "unknown",
+              "resetsAt": 1801000000
+            }
+          }
+        ]
+      },
+      {
+        "provider": "codex",
+        "cacheStatus": "available",
+        "updatedAt": 1800000000,
+        "auto": {
+          "enabled": true,
+          "paused": false,
+          "lastAutomaticSwitchAt": null
+        },
+        "accounts": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "alias": "fixture",
+            "active": true,
+            "enabled": true,
+            "health": "ok",
+            "usageStatus": "ok",
+            "windows": [],
+            "paidUsage": {
+              "kind": "credits",
+              "fetchedAt": 1800000000,
+              "stale": false,
+              "hasCredits": true,
+              "unlimited": false,
+              "balance": "12.50",
+              "approxLocalMessages": 24,
+              "approxCloudMessages": 4
+            },
+            "resetCreditsAvailable": 2
+          }
+        ],
+        "daemonRestartPending": true
+      }
+    ],
+    "generatedAt": 1800000000,
+    "cacheOnly": true
+  }
+}

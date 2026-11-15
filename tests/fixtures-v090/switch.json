@@ -1,0 +1,9 @@
+{
+  "outcome": "switched",
+  "daemonRestartPending": true,
+  "outgoingAccountStillLoaded": {
+    "account": "00000000-0000-4000-8000-000000000001",
+    "inventoryKnown": false,
+    "accessTokenExpiresAt": 1800003600
+  }
+}

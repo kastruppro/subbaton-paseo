@@ -6,7 +6,7 @@ import type { Handoff } from "../shared/handoff.js";
 const base: Handoff = {
   id: "h1", provider: "agy", target: "22222222-2222-4222-8222-222222222222", targetAlias: "home", trigger: "manual",
   restartDaemon: false, phase: "waiting", requestedAt: 1, deadline: 2, updatedAt: 1, waitingFor: 2, code: "turnRunning",
-  message: "Waiting for 2 running turns to finish. Nothing is interrupted.", affected: [], reopened: [], failedReopen: [], daemonOutcome: null,
+  message: "Waiting for 2 running turns to finish. Nothing is interrupted.", affected: [], reopened: [], failedReopen: [], daemonOutcome: null, switchKey: null,
 };
 
 test("handoff lines name the phase, target and coordinator message", () => {

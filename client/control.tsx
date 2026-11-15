@@ -34,6 +34,9 @@ import {
   eventSummary,
   formatLeaf,
   humanize,
+  isCreditsFallback,
+  creditsFallbackTitle,
+  creditsFallbackHelp,
   move,
   orderView,
   parseOwnerNames,
@@ -306,8 +309,8 @@ function FieldControl({
     case "switch":
       return (
         <SettingsSwitch
-          label={view.field.title}
-          hint={hintFor(view)}
+          label={isCreditsFallback(view.field.path) ? creditsFallbackTitle(view.value === true) : view.field.title}
+          hint={isCreditsFallback(view.field.path) ? `${creditsFallbackHelp()} ${hintFor(view)}` : hintFor(view)}
           value={view.value === true}
           disabled={disabled}
           onValueChange={(value) => update(view.path, value)}

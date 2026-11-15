@@ -1,0 +1,98 @@
+{
+  "missing": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "alias": "fixture",
+    "active": true,
+    "enabled": true,
+    "health": "ok",
+    "usageStatus": "ok",
+    "windows": []
+  },
+  "partial": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "alias": "fixture",
+    "active": true,
+    "enabled": true,
+    "health": "ok",
+    "usageStatus": "ok",
+    "windows": [],
+    "paidUsage": {
+      "kind": "credits",
+      "fetchedAt": 1800000000,
+      "stale": false
+    }
+  },
+  "zero": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "alias": "fixture",
+    "active": true,
+    "enabled": true,
+    "health": "ok",
+    "usageStatus": "ok",
+    "windows": [],
+    "paidUsage": {
+      "kind": "credits",
+      "fetchedAt": 1800000000,
+      "stale": false,
+      "hasCredits": false,
+      "balance": "0"
+    }
+  },
+  "unlimited": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "alias": "fixture",
+    "active": true,
+    "enabled": true,
+    "health": "ok",
+    "usageStatus": "ok",
+    "windows": [],
+    "paidUsage": {
+      "kind": "credits",
+      "fetchedAt": 1800000000,
+      "stale": false,
+      "unlimited": true
+    }
+  },
+  "stale": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "alias": "fixture",
+    "active": true,
+    "enabled": true,
+    "health": "ok",
+    "usageStatus": "ok",
+    "windows": [],
+    "paidUsage": {
+      "kind": "credits",
+      "fetchedAt": 1799999000,
+      "stale": true,
+      "hasCredits": true,
+      "balance": "12.50"
+    }
+  },
+  "attention": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "alias": "fixture",
+    "active": true,
+    "enabled": true,
+    "health": "attention",
+    "usageStatus": "needs-attention",
+    "windows": [],
+    "attentionSince": 1799990000
+  },
+  "claude-unknown-cap": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "alias": "fixture",
+    "active": true,
+    "enabled": true,
+    "health": "ok",
+    "usageStatus": "ok",
+    "windows": [],
+    "paidUsage": {
+      "kind": "extraUsage",
+      "fetchedAt": 1800000000,
+      "stale": false,
+      "enabled": true,
+      "usedCredits": 120
+    }
+  }
+}

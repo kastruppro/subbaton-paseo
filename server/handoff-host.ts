@@ -9,6 +9,7 @@ import {
   type HandoffSettings,
 } from "../shared/handoff.js";
 import { HandoffCoordinator, paseoAgentPort, type AgentPort, type HandoffStore } from "./handoff.js";
+import { LimitedAgentRecovery, type RecoveryStore, type TurnOutcome } from "./limited-agents.js";
 import type { SubBatonService } from "./service.js";
 
 const defaults: HandoffSettings = handoffSettings.schema.parse({});
@@ -20,7 +21,13 @@ type Host = Pick<PluginServerContext, "registerSettings" | "handle" | "addHook">
  * hooks, so the latest one seen is kept for the periodic tick; turn-end hooks nudge a tick at the
  * idle boundary. Returns the cleanup function.
  */
-export function registerHandoff(server: Host, service: SubBatonService, store: HandoffStore, intervalMs = 5000) {
+export function registerHandoff(
+  server: Host,
+  service: SubBatonService,
+  store: HandoffStore,
+  intervalMs = 5000,
+  recoveryStore: RecoveryStore = { load: async () => null, save: async () => {} },
+) {
   const settings = server.registerSettings(handoffSettings);
   const read = async (): Promise<HandoffSettings> => {
     const current = await settings.read();
@@ -33,6 +40,16 @@ export function registerHandoff(server: Host, service: SubBatonService, store: H
     if (port) latest = port;
     return port;
   };
+  const recovery = new LimitedAgentRecovery(
+    recoveryStore,
+    async () => (await read()).resumeLimitedCodexAgents,
+    () => service.activeAccount("codex"),
+  );
+  coordinator.onCodexAdopted = (key, account) =>
+    void recovery
+      .adopt(key, account)
+      .then(() => recovery.run(latest))
+      .catch(() => undefined);
   const nudge = (port: AgentPort | null = latest) => void coordinator.tick(port).catch(() => undefined);
 
   server.handle(handoffStatusRpc, (_input, context) => {
@@ -58,17 +75,34 @@ export function registerHandoff(server: Host, service: SubBatonService, store: H
     nudge(port);
     return response;
   });
-  const removeHook = server.addHook("agent.turn.after", async (_event, context) => {
-    nudge(capture(context));
+  type HookEvent = { agent?: { id: string; provider: string; workspaceId?: string | null }; turnId?: string | null; outcome?: TurnOutcome };
+  const removeBefore = server.addHook("agent.turn.before", async (event, context) => {
+    capture(context);
+    const e = event as HookEvent;
+    if (e.agent) await recovery.turnBefore(e.agent, e.turnId ?? null).catch(() => undefined);
+  });
+  const removeArchive = server.addHook("agent.archive.after", async (event) => {
+    const e = event as HookEvent;
+    if (e.agent) await recovery.archived(e.agent.id).catch(() => undefined);
+  });
+  const removeHook = server.addHook("agent.turn.after", async (event, context) => {
+    const port = capture(context);
+    const e = event as HookEvent;
+    if (e.agent && e.outcome) await recovery.turnAfter(e.agent, e.turnId ?? null, e.outcome).catch(() => undefined);
+    if (recovery.hasPending()) void recovery.run(port ?? latest).catch(() => undefined);
+    nudge(port);
   });
   const timer = setInterval(() => nudge(), intervalMs);
   timer.unref?.();
   return {
     coordinator,
+    recovery,
     capture,
     cleanup: () => {
       clearInterval(timer);
       removeHook();
+      removeBefore();
+      removeArchive();
     },
   };
 }

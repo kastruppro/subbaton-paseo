@@ -45,6 +45,8 @@ export const handoffSchema = z.object({
   reopened: z.array(id).max(256).default([]),
   failedReopen: z.array(id).max(256).default([]),
   daemonOutcome: z.string().max(64).nullable().default(null),
+  /** Switch identity (`txn:<id>` or `event:<id>`) of the verified switch this handoff follows, when known. */
+  switchKey: z.string().max(600).nullable().default(null),
 });
 export type Handoff = z.infer<typeof handoffSchema>;
 export const handoffStateSchema = z.object({
@@ -77,6 +79,12 @@ export const handoffSettings = defineSettings({
     closeAgyForAutomaticSwitch: z.boolean().default(true),
     /** How long a handoff waits for running turns before it expires without changes. */
     idleWaitMinutes: z.number().int().min(1).max(240).default(30),
+    /**
+     * After a verified Codex switch and a successful daemon restart, send one continuation message to
+     * Codex agents (all workspaces on this host) whose latest turn ended in a provider usage limit.
+     * It never enables the daemon restart by itself.
+     */
+    resumeLimitedCodexAgents: z.boolean().default(true),
   }),
 });
 export type HandoffSettings = z.infer<typeof handoffSettings.schema>;

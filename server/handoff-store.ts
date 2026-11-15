@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { HandoffState } from "../shared/handoff.js";
 import type { HandoffStore } from "./handoff.js";
+import type { RecoveryStore } from "./limited-agents.js";
 
 /** Default location: plugin-owned, outside the CLI's ~/.subbaton state. Holds no secrets. */
 export const defaultHandoffPath = () => join(homedir(), "Library", "Application Support", "SubBaton Paseo", "handoff-v1.json");
@@ -41,4 +42,11 @@ export function fileHandoffStore(path = defaultHandoffPath()): HandoffStore {
       }
     },
   };
+}
+
+export const defaultRecoveryPath = () => join(homedir(), "Library", "Application Support", "SubBaton Paseo", "limited-agents-v1.json");
+/** Same safety as the handoff file (owner-only, atomic, no symlinks); holds only agent and turn IDs and switch keys. */
+export function fileRecoveryStore(path = defaultRecoveryPath()): RecoveryStore {
+  const base = fileHandoffStore(path);
+  return { load: () => base.load(), save: (state) => base.save(state as never) };
 }

@@ -28,6 +28,8 @@ export interface AgentSnapshot {
 export interface AgentPort {
   list(): Promise<AgentSnapshot[]>;
   reload(id: string): Promise<void>;
+  /** Only the limited-agent continuation sends a message (one explicit continuation, never a replay). */
+  send?(id: string, text: string): Promise<void>;
 }
 /** notAllowed: an agy process outside the --only-pids list ran, nothing changed. notRun: auto run-once did nothing. */
 export type SwitchKind = "switched" | "unchanged" | "refused" | "notAllowed" | "notRun" | "stoppedFailed" | "uncertain" | "busy";
@@ -145,6 +147,8 @@ export class HandoffCoordinator {
   private tickPort: AgentPort | null = null;
   private running = false;
   agentApiSeen = false;
+  /** Called once per verified Codex switch whose daemon restart succeeded (account = switch target, when known). */
+  onCodexAdopted: ((switchKey: string, account: string | null) => void) | null = null;
   private paseoAnchor: number | null;
   private listTimeoutMs: number;
   private reloadTimeoutMs: number;
@@ -292,6 +296,7 @@ export class HandoffCoordinator {
         reopened: [],
         failedReopen: [],
         daemonOutcome: null,
+        switchKey: null,
       };
       this.state.handoffs[provider] = handoff;
       await this.persist();
@@ -379,7 +384,7 @@ export class HandoffCoordinator {
   }
 
   /** A reload-only Codex handoff after a verified switch; optionally restarts the shared daemon. */
-  private automaticCodex(settings: HandoffSettings, code: string, message: string): Handoff {
+  private automaticCodex(settings: HandoffSettings, code: string, message: string, switchKey: string | null = null): Handoff {
     const now = this.now();
     return {
       id: this.newId(),
@@ -399,6 +404,7 @@ export class HandoffCoordinator {
       reopened: [],
       failedReopen: [],
       daemonOutcome: null,
+      switchKey,
     };
   }
   private switchKey(key: string) {
@@ -427,6 +433,10 @@ export class HandoffCoordinator {
             settings,
             "queued",
             "Codex switched. Waiting until Paseo Codex agents are idle to pick up the new login.",
+            (() => {
+              const last = unseen[unseen.length - 1]!;
+              return this.switchKey(last.transaction ? "txn:" + last.transaction : "event:" + (last.id ?? `${last.at}:${last.kind}`));
+            })(),
           );
         }
         await this.persist();
@@ -470,6 +480,7 @@ export class HandoffCoordinator {
       reopened: [],
       failedReopen: [],
       daemonOutcome: null,
+      switchKey: null,
     };
     await this.persist();
   }
@@ -537,6 +548,8 @@ export class HandoffCoordinator {
         code: affected.length ? "reloading" : daemonOutcome === "restarted" ? "daemonRestarted" : "nothingToReload",
         message: (affected.length ? "Reloading idle Codex agents with the new login." : "No Paseo Codex agents needed a reload.") + daemonNote,
       });
+      // Adoption: a verified switch AND a successful restart of the daemon for this login.
+      if (daemonOutcome === "restarted" && h.switchKey) this.onCodexAdopted?.(h.switchKey, null);
       return;
     }
     const options: SwitchOptions = {};
@@ -651,6 +664,8 @@ export class HandoffCoordinator {
           code: out.kind === "switched" ? "switched" : "alreadyActive",
           message: reload ? "Switch verified. Reopening agents with their saved conversations." : out.kind === "switched" ? "Switch verified. No Paseo agents needed reopening." : "That account was already active.",
         });
+        if (h.provider === "codex" && out.kind === "switched" && daemonOutcome === "restarted" && out.transaction)
+          this.onCodexAdopted?.("txn:" + out.transaction, h.target);
         return;
       }
       case "refused":
@@ -737,7 +752,7 @@ const agentEntry = z.object({
 interface PaseoAgentsLike {
   agents: {
     list(options: unknown): Promise<{ entries: unknown[]; pageInfo?: { hasMore?: boolean; nextCursor?: string | null } }>;
-    ref(id: string): { reload(options?: { requestId?: string }): Promise<unknown> };
+    ref(id: string): { reload(options?: { requestId?: string }): Promise<unknown>; send(text: string): Promise<unknown> };
   };
 }
 /** Adapts the SDK's PaseoApi (from an RPC or hook context) to the coordinator's agent port. */
@@ -763,6 +778,9 @@ export function paseoAgentPort(api: unknown): AgentPort | null {
     },
     async reload(id) {
       await paseo.agents.ref(id).reload({ requestId: `subbaton-handoff-${id}` });
+    },
+    async send(id, text) {
+      await paseo.agents.ref(id).send(text);
     },
   };
 }

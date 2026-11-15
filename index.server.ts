@@ -21,7 +21,7 @@ import { SubBatonService } from "./server/service.js";
 import { nativeCLI } from "./server/exec.js";
 import { resolveBinary } from "./server/binary.js";
 import { registerHandoff } from "./server/handoff-host.js";
-import { fileHandoffStore } from "./server/handoff-store.js";
+import { fileHandoffStore, fileRecoveryStore } from "./server/handoff-store.js";
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(hostSettings);
   server.registerSettings(displaySettings);
@@ -34,7 +34,7 @@ export default function contribute(server: PluginServerContext) {
     );
   });
   const unsubscribe = settings.subscribe(() => service.configurationChanged());
-  const handoff = registerHandoff(server, service, fileHandoffStore());
+  const handoff = registerHandoff(server, service, fileHandoffStore(), 5000, fileRecoveryStore());
   server.handle(statusRpc, (_input, context) => {
     // Clients poll status; their PaseoApi keeps the handoff coordinator's agent view current.
     handoff.capture(context);

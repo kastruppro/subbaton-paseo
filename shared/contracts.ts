@@ -15,10 +15,37 @@ export const windowSchema = z.object({
   fetchedAt: time,
   windowSeconds: z.number().finite().nullable().optional(),
 });
+/** 0.9.0 optional fields: anything malformed is treated as absent (unknown), never as zero or unlimited. */
+const optionalBool = z.boolean().optional().catch(undefined);
+const optionalNumber = z.number().finite().optional().catch(undefined);
+const optionalCount = z.number().finite().min(0).optional().catch(undefined);
+export const paidUsageSchema = z
+  .object({
+    kind: z.enum(["credits", "extraUsage"]),
+    fetchedAt: z.number().finite(),
+    stale: z.boolean().catch(true),
+    enabled: optionalBool,
+    hasCredits: optionalBool,
+    unlimited: optionalBool,
+    balance: z
+      .union([z.string().max(64), z.number().finite().transform(String)])
+      .optional()
+      .catch(undefined),
+    usedCredits: optionalNumber,
+    monthlyLimit: optionalNumber,
+    utilization: optionalNumber,
+    currency: text.optional().catch(undefined),
+    resetsAt: optionalNumber,
+    approxLocalMessages: optionalCount,
+    approxCloudMessages: optionalCount,
+  })
+  .optional()
+  .catch(undefined);
+export type PaidUsage = NonNullable<z.infer<typeof paidUsageSchema>>;
 export const accountSchema = z.object({
   id: text,
   alias: text,
-  email: text.nullable(),
+  email: text.nullable().default(null),
   active: z.boolean(),
   enabled: z.boolean(),
   health: z
@@ -35,12 +62,20 @@ export const accountSchema = z.object({
         ? v
         : "unknown",
     ),
-  plan: text.nullable(),
-  loginExpiresAt: time,
+  plan: text.nullable().default(null),
+  loginExpiresAt: time.default(null),
   usageStatus: text,
   summaryStatus: text.nullable().optional(),
   warnings: z.array(text).max(8).optional(),
   windows: z.array(windowSchema).max(256),
+  paidUsage: paidUsageSchema,
+  attentionSince: optionalNumber,
+  resetCreditsAvailable: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .catch(undefined),
 });
 /** Optional contract additions; anything malformed is treated as absent so older CLIs keep working. */
 const autoSchema = z

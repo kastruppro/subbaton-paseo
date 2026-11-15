@@ -104,8 +104,13 @@ export function SettingsScreen(props: PluginSurfaceProps) {
     { provider: "claude", windowId: "weekly_scoped:Fable" },
     { provider: "codex", windowId: "codex:primary_window" },
     { provider: "codex", windowId: "codex:secondary_window" },
+    { provider: "claude", windowId: "paid" },
+    { provider: "codex", windowId: "paid" },
   ];
-  const labels = new Map<string, string>();
+  const labels = new Map<string, string>([
+    ["claude:paid", "Extra usage"],
+    ["codex:paid", "Credits"],
+  ]);
   if (query.data?.ok)
     for (const p of query.data.data?.providers ?? [])
       if (p.provider !== "unknown")

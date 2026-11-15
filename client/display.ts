@@ -57,18 +57,22 @@ export function chooseItems(
   window: Window | null;
   account: Account | null;
 }[] {
-  return items.map((item) => {
+  // The model-quota window renders at most once per agy account: the first selected item that resolves
+  // to it keeps the slot, later ones that resolve to the same window are skipped (the grid shrinks).
+  const modelQuotaTaken = new Set<Window>();
+  return items.flatMap((item) => {
     const account =
       status?.providers
         .find((p) => p.provider === item.provider)
         ?.accounts.find((a) => a.active) ?? null;
-    return {
-      ...item,
-      account,
-      window:
-        account?.windows.find((w) => w.id === item.windowId) ??
-        geminiFallback(item.provider, item.windowId, account),
-    };
+    const window =
+      account?.windows.find((w) => w.id === item.windowId) ??
+      geminiFallback(item.provider, item.windowId, account);
+    if (item.provider === "agy" && window && (window.id === "gemini:unknown" || (window.quotaSource === "models" && window.window === "unknown"))) {
+      if (modelQuotaTaken.has(window)) return [];
+      modelQuotaTaken.add(window);
+    }
+    return [{ ...item, account, window }];
   });
 }
 export function timestamp(value: number | null) {

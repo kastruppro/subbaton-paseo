@@ -74,7 +74,8 @@ test("no Gemini data: one neutral line, never a warning", () => {
   assert.equal(geminiNotice("agy", nullPercent()), null, "a model-quota row with an unknown percent is Gemini data, shown as —");
   assert.equal(geminiNotice("agy", acct([w("gemini:5h")])), null);
   assert.equal(geminiNotice("claude", acct([w("five_hour")])), null);
-  assert.deepEqual(geminiNotice("agy", acct([])), notice);
+  assert.equal(geminiNotice("agy", acct([])), null, "G-2: no usage data at all keeps the row's own state text");
+  assert.equal(geminiNotice("agy", acct([], { health: "needsLogin" })), null);
   assert.equal(shortWarning("agy", "partial-groups", ["x"]), null, "the amber Google warning is gone");
   assert.equal(shortWarning("agy", null, []), null);
 });
@@ -109,6 +110,27 @@ test("footer: label 'Gemini', no duration, spoken label, saved selections keep w
   assert.equal(chooseItems(claudeStatus, [{ provider: "claude", windowId: "gemini:5h" }])[0]!.window, null);
   // the fallback window has no pace tick or duration
   assert.equal(windowPresentation("agy", chooseItems(statusSchema.parse({ cacheOnly: true, generatedAt: 1, providers: [{ provider: "agy", cacheStatus: "available", accounts: [withModel()] }] }), [{ provider: "agy", windowId: "gemini:5h" }])[0]!.window!, 80, 100, false, 1000).tick, null);
+});
+
+test("G-1: the model-quota window renders at most once per agy account; the first selected item keeps the slot", () => {
+  const status = statusSchema.parse({ cacheOnly: true, generatedAt: 1, providers: [{ provider: "agy", cacheStatus: "available", accounts: [withModel()] }] });
+  const ids = (items: { provider: "claude" | "codex" | "agy"; windowId: string }[]) => chooseItems(status, items).map((i) => i.windowId);
+  assert.deepEqual(ids([
+    { provider: "agy", windowId: "gemini:5h" },
+    { provider: "agy", windowId: "gemini:weekly" },
+    { provider: "agy", windowId: "gemini:unknown" },
+    { provider: "agy", windowId: "claude-gpt:5h" },
+  ]), ["gemini:5h", "claude-gpt:5h"], "the grid shrinks: 4 saved items, 2 cells");
+  assert.deepEqual(ids([
+    { provider: "agy", windowId: "claude-gpt:5h" },
+    { provider: "agy", windowId: "gemini:unknown" },
+    { provider: "agy", windowId: "gemini:5h" },
+  ]), ["claude-gpt:5h", "gemini:unknown"], "an explicit model-quota item keeps its slot over a later fallback");
+  // a real window is never merged, and unrelated unknown cells are kept
+  const real = statusSchema.parse({ cacheOnly: true, generatedAt: 1, providers: [{ provider: "agy", cacheStatus: "available", accounts: [acct([modelQuota(), w("gemini:5h", { resetsAt: 9999 })])] }] });
+  assert.deepEqual(chooseItems(real, [{ provider: "agy", windowId: "gemini:5h" }, { provider: "agy", windowId: "gemini:unknown" }, { provider: "agy", windowId: "gemini:weekly" }]).map((i) => i.windowId), ["gemini:5h", "gemini:unknown"]);
+  assert.deepEqual(chooseItems(status, [{ provider: "claude", windowId: "five_hour" }, { provider: "claude", windowId: "five_hour" }]).map((i) => i.windowId), ["five_hour", "five_hour"], "other duplicates are untouched");
+  assert.equal(chooseItems(null, [{ provider: "agy", windowId: "gemini:5h" }, { provider: "agy", windowId: "gemini:weekly" }]).length, 2, "without data nothing is merged");
 });
 
 test("window type exports", () => {

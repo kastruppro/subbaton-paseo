@@ -233,9 +233,11 @@ export function expandedSections(
   };
 }
 
-/** One neutral grey line (never a warning) when an agy account has no Gemini data at all. */
+/** One neutral grey line (never a warning) when an agy account has usage data but no Gemini window. */
 export function geminiNotice(provider: Provider, account: Account): { text: string; tone: "muted" } | null {
   if (provider !== "agy") return null;
+  // Without any usage data the row's own state text (needs login, not read yet, ...) says why.
+  if (account.windows.length === 0) return null;
   const has = account.windows.some((w) => w.id.startsWith("gemini:") || isModelQuota(w));
   return has ? null : { text: "Gemini: not available", tone: "muted" };
 }

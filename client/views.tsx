@@ -217,10 +217,9 @@ function FooterContent({
   const ready = settings.status === "ready";
   const warning = ready ? settings.values.warning : 80,
     danger = ready ? settings.values.danger : 100;
-  const grid = footerGrid(ready ? settings.values.items.length : 0);
-  const items = ready
-    ? chooseItems(data, settings.values.items).slice(0, grid.count)
-    : [];
+  const chosen = ready ? chooseItems(data, settings.values.items) : [];
+  const grid = footerGrid(chosen.length);
+  const items = chosen.slice(0, grid.count);
   const offline = query.isError || query.data?.ok === false;
   const mode = footerSummary({
     settingsReady: ready,

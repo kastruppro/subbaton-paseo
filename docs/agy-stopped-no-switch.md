@@ -10,3 +10,7 @@ The plugin classifies it as `stoppedNoSwitch` (neither a failure nor a switch). 
 - `manualResumeRequired: true` (a stopped session had no conversation ID) is added to the handoff message, so the owner can see why an agent may start without its thread.
 - `agy auto plan` with `blockedOnlyByProcesses: true` and `stopReason: "renewCandidates"` triggers the same `run-once --stop-agy --only-pids` even when `targetIfProcessesStopped` is null (renewal decides the target). The owner settings and the idle rules are unchanged.
 - Accepted: the "no switch was needed" and no-saved-conversation wording is kept in memory only; after a plugin restart during the reopening the final message reads like a normal reopen.
+
+## Timeout
+
+`agy auto run-once --stop-agy` runs with `agyRunOnceTimeoutMs` (600 000 ms) because the core may spend up to 360 s on sequential isolated renewals, plus cleanup and the final read. A timeout is classified `uncertain` (the agents stay as they are until the owner checks), never as "nothing was stopped". The manual `agy switch --stop-agy` does not renew and keeps 120 s. While the run lasts the handoff stays in the `switching` phase: it has no deadline of its own, owner actions answer "busy" after two seconds instead of waiting, and the popover shows "Renewing agy accounts and switching…" for an automatic agy handoff.

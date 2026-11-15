@@ -163,6 +163,23 @@ test("agy auto plan and run-once: fixed argv and every outcome mapped", async ()
   assert.equal((await run(ok({ outcome: "uncertain", reason: "replanFailed", stoppedProcesses: stoppedNoSwitch.stoppedProcesses }))).kind, "uncertain");
 });
 
+test("agy run-once with --stop-agy gets the long renewal timeout; a timeout is uncertain, never 'nothing stopped'", async () => {
+  const { agyRunOnceTimeoutMs } = await import("../server/service.js");
+  assert.equal(agyRunOnceTimeoutMs, 600_000);
+  const { cli, service } = await withStatus("agy");
+  cli.on(["agy", "auto", "run-once"], ok({ outcome: "stay" }));
+  await service.agyAutoRunOnce([11]);
+  assert.equal(cli.calls.at(-1)?.timeout, 600_000);
+  // the manual handoff switch does not renew and keeps the normal timeout
+  cli.on(["agy", "switch"], ok({ outcome: "switched", postSwitchVerification: "verified" }));
+  await service.handoffSwitch("agy", target, { onlyPids: [11] });
+  assert.equal(cli.calls.at(-1)?.timeout, 120_000);
+  cli.on(["agy", "auto", "run-once"], { code: -2, stdout: "" } as never);
+  const out = await service.agyAutoRunOnce([11]);
+  assert.equal(out.kind, "uncertain");
+  assert.doesNotMatch(out.message, /Nothing was stopped/);
+});
+
 test("codex daemon pending and restart: fixed argv, fail closed", async () => {
   const { cli, service } = await withStatus("codex");
   cli.on(["codex", "processes"], ok({ daemonRestartPending: true }));

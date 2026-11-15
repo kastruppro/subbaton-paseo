@@ -111,6 +111,12 @@ interface CallOptions {
   input?: string;
   unavailable?: [string, string];
 }
+/**
+ * `agy auto run-once --stop-agy` may renew stale candidates before it switches. The core admits at most 360 s of
+ * sequential isolated renewals plus cleanup and the final read (see the core's renewal budget in
+ * docs/json-contract.md), so the plugin allows 10 minutes. A timeout is still uncertain, never "nothing was stopped".
+ */
+export const agyRunOnceTimeoutMs = 600_000;
 const uncertainMessages: Record<Exclude<CallKind, "credential">, string> = {
   read: "The result is unknown; nothing was changed. Retry shortly.",
   settings:
@@ -889,7 +895,7 @@ export class SubBatonService {
     this.mutating = true;
     this.invalidate();
     try {
-      const response = await this.call(["agy", "auto", "run-once", "--stop-agy", "--only-pids", pids.join(",")], 120000, true);
+      const response = await this.call(["agy", "auto", "run-once", "--stop-agy", "--only-pids", pids.join(",")], agyRunOnceTimeoutMs, true);
       if (response.error) {
         if (response.error.outcome === "uncertain") return { kind: "uncertain", code: "uncertain", message: "The automatic switch result is uncertain." };
         const stopped = "stopped" in response && response.stopped === true;

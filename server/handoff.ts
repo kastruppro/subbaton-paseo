@@ -669,7 +669,7 @@ export class HandoffCoordinator {
       }
     } else if (h.restartDaemon) options.restartDaemon = true;
     // Persist the affected set before the CLI runs so a crash can be reported precisely.
-    this.update(h, { phase: "switching", affected, waitingFor: 0, code: "switching", message: h.provider === "agy" && affected.length ? `Closing ${affected.length} idle agy ${affected.length === 1 ? "agent" : "agents"} and switching.` : "Switching." });
+    this.update(h, { phase: "switching", affected, waitingFor: 0, code: "switching", message: h.provider === "agy" && h.trigger === "automaticSwitch" ? `Closing ${affected.length} idle agy ${affected.length === 1 ? "agent" : "agents"}, renewing candidate accounts (up to 10 minutes) and switching.` : h.provider === "agy" && affected.length ? `Closing ${affected.length} idle agy ${affected.length === 1 ? "agent" : "agents"} and switching.` : "Switching." });
     await this.persist();
     // Review L1: re-check right before the CLI runs; anything busy or a changed idle set goes back to waiting.
     const again = (await agents.list()).filter((a) => a.provider === paseoProviderId[h.provider]);

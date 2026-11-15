@@ -142,6 +142,8 @@ export function handoffRow(h: Handoff | null | undefined): RowLine | null {
       text: `Switching to ${alias} when idle · ${h.waitingFor} agent${h.waitingFor === 1 ? "" : "s"} working`,
       action: "cancel",
     };
+  if (h.phase === "switching" && h.provider === "agy" && h.trigger === "automaticSwitch")
+    return { kind: "warning", tone: "warning", text: "Renewing agy accounts and switching…" };
   if (active.includes(h.phase))
     return {
       kind: "warning", tone: "warning",

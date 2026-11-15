@@ -176,7 +176,7 @@ test("other account line shows worst windows", () => {
 
 test("idle wording is one sentence; claude has no idle choice", () => {
   assert.equal(idleExplanation("codex", true), "Waits until no Paseo Codex agent is working, then switches and restarts the daemon.");
-  assert.equal(idleExplanation("codex", false), "Waits until no Paseo Codex agent is working, then switches and reloads those agents.");
+  assert.equal(idleExplanation("codex", false), "Switches now, reloads the Codex agents that are not working at once and the others as soon as they are idle.");
   assert.equal(idleExplanation("agy", false), "Waits until no Paseo agy agent is working, then closes them, switches and reopens them.");
   assert.deepEqual(switchChoices("claude"), ["now"]);
   assert.deepEqual(switchChoices("codex"), ["now", "idle"]);

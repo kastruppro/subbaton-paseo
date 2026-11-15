@@ -894,17 +894,48 @@ test("codex: one busy and two idle agents reload the idle ones at once and the b
   assert.deepEqual(agents.reloads.sort(), ["c1", "c2", "c3"]);
   assert.equal(coordinator.status().handoffs.codex?.phase, "done");
 });
-test("codex: a busy agent past the deadline gets no reload and never blocked the others", async () => {
+test("codex: a busy agent has no deadline; it is reloaded whenever it turns idle and never blocks the others", async () => {
   const { agents, coordinator, advance } = setup({ idleWaitMinutes: 1 });
   agents.agents = [agent("c1", "codex"), agent("c3", "codex", "running", true)];
   await coordinator.request("codex", target);
   await coordinator.tick(agents);
   assert.deepEqual(agents.reloads, ["c1"]);
-  advance(120);
+  advance(3 * 3600);
   await coordinator.tick(agents);
   assert.deepEqual(agents.reloads, ["c1"]);
+  assert.equal(coordinator.status().handoffs.codex?.phase, "reopening", "still waiting for the running turn");
+  agents.agents[1] = agent("c3", "codex");
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads, ["c1", "c3"]);
   assert.equal(coordinator.status().handoffs.codex?.phase, "done");
-  assert.equal(coordinator.status().handoffs.codex?.code, "reopenTimeout");
+});
+test("R3-M2: a new switch event supersedes a reopening Codex handoff and reloads every agent under its own key", async () => {
+  const { cli, agents, coordinator, advance } = setup();
+  cli.events_ = [];
+  agents.agents = [agent("c1", "codex"), agent("c3", "codex", "running", true)];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  const first = coordinator.status().handoffs.codex!;
+  assert.equal(first.phase, "reopening");
+  advance(61);
+  cli.events_ = [{ at: 1060, provider: "codex", kind: "automaticSwitch", target }];
+  await coordinator.tick(agents);
+  const second = coordinator.status().handoffs.codex!;
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.trigger, "automaticSwitch");
+  assert.deepEqual(agents.reloads, ["c1", "c1"], "the idle agent is reloaded once per switch");
+  agents.agents[1] = agent("c3", "codex");
+  await coordinator.tick(agents);
+  assert.deepEqual(agents.reloads.filter((id) => id === "c3"), ["c3"], "the late agent is reloaded once, under the newest switch");
+});
+test("R3-M2: a manual request is accepted while a Codex handoff only waits to reload running agents", async () => {
+  const { agents, coordinator } = setup();
+  agents.agents = [agent("c1", "codex", "running", true)];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  assert.equal(coordinator.status().handoffs.codex?.phase, "reopening");
+  const again = await coordinator.request("codex", target);
+  assert.equal(again.result.outcome, "success");
 });
 test("codex: the shared daemon restart still waits for every agent to be idle", async () => {
   const { cli, agents, coordinator } = setup({ restartCodexDaemon: true });

@@ -119,7 +119,9 @@ export const switchChoices = (provider: Provider): ("now" | "idle")[] =>
 export function idleExplanation(provider: "codex" | "agy", restartDaemon: boolean) {
   return provider === "agy"
     ? "Waits until no Paseo agy agent is working, then closes them, switches and reopens them."
-    : `Waits until no Paseo Codex agent is working, then switches and ${restartDaemon ? "restarts the daemon" : "reloads those agents"}.`;
+    : restartDaemon
+      ? "Waits until no Paseo Codex agent is working, then switches and restarts the daemon."
+      : "Switches now, reloads the Codex agents that are not working at once and the others as soon as they are idle.";
 }
 
 export type RowLine = {

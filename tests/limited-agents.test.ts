@@ -916,3 +916,18 @@ test("R2-H1: the real Codex window ids (codex:primary_window, codex:secondary_wi
   assert.equal(targetUsage(realCodex([...both(100, 20), row("spark:primary_window", 5, { stale: true })], noPaid), now).verdict, "unknown", "an additional stale bucket makes it unknown, as in the core");
   assert.equal(targetUsage(realCodex(both(100, 20), noPaid), now).readAt, 990);
 });
+
+test("R3-M2: a candidate is parked, not dropped, when the login changed; the adoption of the newer switch continues it", async () => {
+  const r = make(), port = new Fake();
+  port.add("a");
+  await limit(r, "a");
+  await adopt(r, "txn:1");
+  r.account.v = "acct-B"; // a newer switch happened, its adoption has not arrived yet
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, []);
+  assert.ok(has(r, /waiting for the next switch agent=a reason=login changed/));
+  assert.ok(!has(r, /skipped agent=a/));
+  await adopt(r, "txn:2");
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, ["reload:a", `send:a:${continuationText}`]);
+});

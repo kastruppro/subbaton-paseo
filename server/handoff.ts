@@ -133,6 +133,8 @@ const interactiveExecutables = new Set(
 const interactive = (name: string) => interactiveExecutables.has(name.replace(/^-/, "").toLowerCase());
 /** Not running a turn and safe to reload: idle, and for Codex also an agent that stopped in an error (for example a usage limit). */
 const reloadable = (provider: HandoffProvider, a: AgentSnapshot) => a.status === "idle" || (provider === "codex" && a.status === "error" && !a.activeTurn);
+/** A Codex handoff that already switched and only waits to reload running agents one by one may be taken over by a newer switch. */
+const supersedable = (h: Handoff | null) => !!h && h.provider === "codex" && h.phase === "reopening";
 const busyStatus = (a: AgentSnapshot) => a.activeTurn || a.status === "running" || a.status === "initializing";
 const terminal = (h: Handoff | null) => !h || !(activePhases as readonly string[]).includes(h.phase);
 const ok = (code: string, message: string): ActionResult => ({ outcome: "success", code, message });
@@ -276,11 +278,14 @@ export class HandoffCoordinator {
     const busy = { result: refuse("busy", "The handoff coordinator is busy (a switch or reopen is running). Retry shortly."), handoff: this.state.handoffs[provider] };
     return this.fast(async () => {
       const current = this.state.handoffs[provider];
-      if (!terminal(current))
+      // A Codex handoff that is only reloading running agents one by one does not block a new request: the new one
+      // takes over (its own ledger key reloads every agent onto the new login).
+      if (!terminal(current) && !supersedable(current))
         return { result: refuse("busy", "A handoff for this provider is already in progress."), handoff: current };
       const account = this.cli.knownAccount(provider, target);
       if (!account)
         return { result: refuse("unknownAccount", "Reload status and choose a known saved account."), handoff: current };
+      if (current && !terminal(current)) this.update(current, { phase: "done", code: "superseded", message: "A newer switch took over; its reload covers the remaining agents." });
       const settings = await this.settings();
       const now = this.now();
       const handoff: Handoff = {
@@ -424,7 +429,8 @@ export class HandoffCoordinator {
     this.state.handledSwitches = [...this.state.handledSwitches.filter((value) => value !== key), key].slice(-200);
   }
   private async pollEvents() {
-    if (this.now() - this.lastEventPoll < 60 || !terminal(this.state.handoffs.codex)) return;
+    const open = this.state.handoffs.codex;
+    if (this.now() - this.lastEventPoll < 60 || (!terminal(open) && !supersedable(open))) return;
     const settings = await this.settings();
     if (!settings.reloadCodexAfterAutomaticSwitch && !settings.restartCodexDaemon && !settings.resumeLimitedCodexAgents) return;
     this.lastEventPoll = this.now();
@@ -438,6 +444,8 @@ export class HandoffCoordinator {
         const unseen = switches.filter((e) => !this.state.handledSwitches.includes(this.switchKey(e.transaction ? "txn:" + e.transaction : "event:" + (e.id ?? `${e.at}:${e.kind}`))));
         for (const event of switches) this.rememberSwitch(event.transaction ? "txn:" + event.transaction : "event:" + (event.id ?? `${event.at}:${event.kind}`));
         if (unseen.length > 0) {
+          const old = this.state.handoffs.codex;
+          if (old && !terminal(old)) this.update(old, { phase: "done", code: "superseded", message: "A newer switch took over; its reload covers the remaining agents." });
           this.state.handoffs.codex = this.automaticCodex(
             settings,
             "queued",
@@ -740,7 +748,10 @@ export class HandoffCoordinator {
       }
     }
     if (waiting > 0) {
-      if (this.now() > h.deadline) {
+      // Per-agent Codex reloads have no deadline: a running agent is reloaded whenever it becomes idle, for as long as
+      // this switch is the current one (a newer switch supersedes it). Only the daemon-restart and agy handoffs time out.
+      const perAgent = h.provider === "codex" && !h.restartDaemon;
+      if (!perAgent && this.now() > h.deadline) {
         const closed = h.provider === "agy";
         this.update(h, {
           phase: closed ? "failed" : "done",

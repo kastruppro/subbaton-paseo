@@ -333,6 +333,12 @@ export class LimitedAgentRecovery {
     const send = port.send!.bind(port);
     const who = short(agentId);
     const drop = (reason?: string) => {
+      if (reason?.startsWith("login changed")) {
+        // The active login moved on (a newer switch is not adopted yet): wait for that adoption, do not lose the agent.
+        candidate.waiting = true;
+        this.logOnce(agentId, `login|${pending.key}`, `waiting for the next switch agent=${who} reason=login changed`);
+        return;
+      }
       if (this.candidates.get(agentId) === candidate) this.candidates.delete(agentId);
       this.clearLogged(agentId);
       if (reason) this.say(`skipped agent=${who} reason=${reason}`);
@@ -410,12 +416,13 @@ export class LimitedAgentRecovery {
     }
     const second = await this.eligible(port, pending, agentId, candidate, true).catch(() => ({ state: "drop" as const, reason: "check failed" }));
     if (second.state !== "ok") {
+      if (second.state === "drop" && second.reason.startsWith("login changed")) {
+        // Nothing was sent; the candidate waits for the adoption of the newer switch (a new key, a new attempt).
+        candidate.waiting = true;
+        return void this.say(`login recheck after reload failed agent=${who}, ${second.reason.replace("login changed, ", "")}, no message, waiting for the next switch`);
+      }
       this.candidates.get(agentId) === candidate && this.candidates.delete(agentId);
-      return void this.say(
-        second.state === "drop" && second.reason.startsWith("login changed")
-          ? `login recheck after reload failed agent=${who}, ${second.reason.replace("login changed, ", "")}, no message`
-          : `skipped agent=${who} reason=${second.state === "drop" ? second.reason : "not idle"} (after reload)`,
-      );
+      return void this.say(`skipped agent=${who} reason=${second.state === "drop" ? second.reason : "not idle"} (after reload)`);
     }
     this.say(`login recheck after reload ok account=${pending.accountId} agent=${who}`);
     // Mark the continuation before sending so a restart between the two cannot treat it as user activity.

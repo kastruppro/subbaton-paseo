@@ -102,7 +102,7 @@ export function HandoffSection({ hostId, colors }: { hostId: string; colors: Col
           />
           <SettingsSwitch
             label="Restart the shared Codex daemon at the idle boundary"
-            hint="Off by default. Once every Paseo Codex agent is idle: --restart-daemon on When idle, and codex daemon restart while a restart is pending after a switch. Terminal Codex sessions attached to the daemon may need codex resume."
+            hint={`Off by default. Once every Paseo Codex agent is idle: --restart-daemon on When idle, and codex daemon restart while a restart is pending after a switch. Terminal Codex sessions attached to the daemon may need codex resume.${prefs.values.restartCodexDaemon ? " With this on, the switch and the restart wait until all Paseo Codex agents are idle at once, which may never happen with many agents." : ""}`}
             value={prefs.values.restartCodexDaemon}
             disabled={prefs.saving}
             onValueChange={(value) => void prefs.save({ ...prefs.values, restartCodexDaemon: value }, prefs.revision)}

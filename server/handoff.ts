@@ -42,6 +42,8 @@ export interface SwitchOutcome {
   daemonOutcome?: string | null;
   /** agy auto run-once: the CLI's 15-minute hold after a failed stop (Unix seconds). */
   retryAt?: number;
+  /** stoppedNoSwitch: a stopped session had no saved conversation ID, so its agent may restart without its thread. */
+  manualResumeRequired?: boolean;
 }
 /** One agy process as the CLI reports it; ancestors is null when the CLI gives no ancestry. */
 export interface AgyProcessInfo {
@@ -133,6 +135,7 @@ const interactiveExecutables = new Set(
 const interactive = (name: string) => interactiveExecutables.has(name.replace(/^-/, "").toLowerCase());
 /** Not running a turn and safe to reload: idle, and for Codex also an agent that stopped in an error (for example a usage limit). */
 const reloadable = (provider: HandoffProvider, a: AgentSnapshot) => a.status === "idle" || (provider === "codex" && a.status === "error" && !a.activeTurn);
+const MANUAL_RESUME_NOTE = " A stopped session had no saved conversation ID (no saved conversation), so that agent may start without its thread.";
 /** A Codex handoff that already switched and only waits to reload running agents one by one may be taken over by a newer switch. */
 const supersedable = (h: Handoff | null) => !!h && h.provider === "codex" && h.phase === "reopening";
 const busyStatus = (a: AgentSnapshot) => a.activeTurn || a.status === "running" || a.status === "initializing";
@@ -145,7 +148,7 @@ export class HandoffCoordinator {
   private ready: Promise<void> | null = null;
   private chain: Promise<unknown> = Promise.resolve();
   /** Handoffs whose agy sessions were stopped for renewal without a switch (only the final message differs). */
-  private noSwitch = new Set<string>();
+  private noSwitch = new Map<string, boolean>();
   private lastEventPoll = -Infinity;
   private lastAgyPlan = -Infinity;
   private agyRetryAt = -Infinity;
@@ -494,13 +497,14 @@ export class HandoffCoordinator {
     if (!settings.closeAgyForAutomaticSwitch) return;
     this.lastAgyPlan = this.now();
     const plan = await this.cli.agyAutoPlan();
-    if (!plan.ok || !plan.blockedOnlyByProcesses || !plan.target) return;
+    // A renewal-only trigger has no known target yet (the final plan decides after the renewal).
+    if (!plan.ok || !plan.blockedOnlyByProcesses) return;
     const now = this.now();
     this.state.handoffs.agy = {
       id: this.newId(),
       provider: "agy",
       target: plan.target,
-      targetAlias: this.cli.knownAccount("agy", plan.target)?.alias ?? null,
+      targetAlias: plan.target ? (this.cli.knownAccount("agy", plan.target)?.alias ?? null) : null,
       trigger: "automaticSwitch",
       restartDaemon: false,
       phase: "waiting",
@@ -554,7 +558,7 @@ export class HandoffCoordinator {
       return;
     }
     let affected = mine.filter((a) => (perAgent ? reloadable(h.provider, a) || busyStatus(a) : reloadable(h.provider, a))).map((a) => a.id);
-    if (h.target === null) {
+    if (h.target === null && h.provider === "codex") {
       const settings = await this.settings();
       if (!settings.reloadCodexAfterAutomaticSwitch) affected = [];
       let daemonOutcome = h.daemonOutcome;
@@ -677,7 +681,7 @@ export class HandoffCoordinator {
     const out =
       h.provider === "agy" && h.trigger === "automaticSwitch"
         ? await this.cli.agyAutoRunOnce(options.onlyPids ?? [])
-        : await this.cli.switchAccount(h.provider, h.target, options);
+        : await this.cli.switchAccount(h.provider, h.target!, options);
     if (h.provider === "codex" && out.kind === "switched" && out.transaction) {
       this.rememberSwitch("txn:" + out.transaction);
       await this.persist();
@@ -707,19 +711,19 @@ export class HandoffCoordinator {
           message: reload ? "Switch verified. Reopening agents with their saved conversations." : out.kind === "switched" ? "Switch verified. No Paseo agents needed reopening." : "That account was already active.",
         });
         if (h.provider === "codex" && out.kind === "switched" && out.transaction)
-          this.onCodexAdopted?.("txn:" + out.transaction, h.target, this.now());
+          this.onCodexAdopted?.("txn:" + out.transaction, h.target!, this.now());
         return;
       }
       case "stoppedNoSwitch": {
         // agy renewal before a switch stopped the sessions, then the final policy chose not to switch: nothing was
         // switched, but the stopped sessions are resumed exactly as after a switch (agent.reload() reopens them).
-        this.noSwitch.add(h.id);
+        this.noSwitch.set(h.id, out.manualResumeRequired === true);
         this.update(h, {
           phase: affected.length > 0 ? "reopening" : "done",
           deadline: this.now() + (await this.settings()).idleWaitMinutes * 60,
           daemonOutcome,
           code: "stoppedNoSwitch",
-          message: affected.length > 0 ? "agy sessions were stopped to renew candidate accounts; no switch was needed. Reopening agents with their saved conversations." : "agy sessions were stopped to renew candidate accounts; no switch was needed. No Paseo agents needed reopening.",
+          message: (affected.length > 0 ? "agy sessions were stopped to renew candidate accounts; no switch was needed. Reopening agents with their saved conversations." : "agy sessions were stopped to renew candidate accounts; no switch was needed. No Paseo agents needed reopening.") + (out.manualResumeRequired ? MANUAL_RESUME_NOTE : ""),
         });
         return;
       }
@@ -802,7 +806,7 @@ export class HandoffCoordinator {
       message: failed
         ? `Reopened ${h.reopened.length}; ${failed} could not be reopened (archived, timed out or reload failed). Reopen them from Paseo.`
         : this.noSwitch.has(h.id)
-          ? `Done. Reopened ${h.reopened.length} ${h.reopened.length === 1 ? "agent" : "agents"}; no switch was needed.`
+          ? `Done. Reopened ${h.reopened.length} ${h.reopened.length === 1 ? "agent" : "agents"}; no switch was needed.${this.noSwitch.get(h.id) ? MANUAL_RESUME_NOTE : ""}`
           : `Done. Reopened ${h.reopened.length} ${h.reopened.length === 1 ? "agent" : "agents"} with the new login.`,
     });
   }

@@ -873,11 +873,12 @@ export class SubBatonService {
   async agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false }> {
     const response = await this.call(["agy", "auto", "plan"], 15000, false, { kind: "read" });
     if (response.error) return { ok: false };
-    const plan = response.result as { blockedOnlyByProcesses?: unknown; targetIfProcessesStopped?: unknown; executionEnabled?: unknown };
+    const plan = response.result as { blockedOnlyByProcesses?: unknown; targetIfProcessesStopped?: unknown; executionEnabled?: unknown; stopReason?: unknown };
     if (typeof plan.blockedOnlyByProcesses !== "boolean") return { ok: false };
     const target = typeof plan.targetIfProcessesStopped === "string" && uuidLike.test(plan.targetIfProcessesStopped) ? plan.targetIfProcessesStopped : null;
     // A paused or disabled provider never executes, so it is never "blocked only by processes" for us.
-    const blocked = plan.blockedOnlyByProcesses && plan.executionEnabled === true && target !== null;
+    // 0.9.6: renewal of stale candidates also needs the sessions stopped; the target is decided after it.
+    const blocked = plan.blockedOnlyByProcesses && plan.executionEnabled === true && (target !== null || plan.stopReason === "renewCandidates");
     return { ok: true, blockedOnlyByProcesses: blocked, target: blocked ? target : null };
   }
   /** agy auto run-once --stop-agy --only-pids: the automatic switch, stopping only Paseo's sessions. */
@@ -903,10 +904,18 @@ export class SubBatonService {
         retryAt?: unknown;
         stoppedProcesses?: unknown;
         processes?: unknown;
+        resumeCommands?: unknown;
+        manualResumeRequired?: unknown;
         switch?: { postSwitchVerification?: unknown; stoppedProcesses?: unknown };
       };
       const reason = typeof result.reason === "string" ? result.reason.slice(0, 64) : "";
       const stoppedAny = (Array.isArray(result.stoppedProcesses) && result.stoppedProcesses.length > 0) || (Array.isArray(result.switch?.stoppedProcesses) && result.switch.stoppedProcesses.length > 0);
+      // Sessions were stopped but nothing switched: the stopped agents are always reopened. Only a result with resume
+      // metadata is trusted; without it the result is uncertain. Never "nothing was stopped".
+      const stoppedNoSwitch = (): SwitchOutcome =>
+        Array.isArray(result.resumeCommands) && typeof result.manualResumeRequired === "boolean"
+          ? { kind: "stoppedNoSwitch", code: "stoppedNoSwitch", message: "agy sessions were stopped to renew candidate accounts; no switch was needed.", manualResumeRequired: result.manualResumeRequired }
+          : { kind: "uncertain", code: "uncertain", message: "Unexpected automatic switch result after stopping agy sessions." };
       switch (result.outcome) {
         case "switched":
           return ["verified", "reapplied"].includes(String(result.switch?.postSwitchVerification))
@@ -922,7 +931,8 @@ export class SubBatonService {
               message: "Some agy sessions did not stop. Nothing was switched.",
               ...(typeof result.retryAt === "number" && Number.isFinite(result.retryAt) ? { retryAt: result.retryAt } : {}),
             };
-          // processStopRefused (stopAttempted false), busy, processBusy...: nothing was signalled.
+          // processStopRefused (stopAttempted false), busy, processBusy...: nothing was signalled, unless sessions were stopped.
+          if (stoppedAny) return stoppedNoSwitch();
           return { kind: "notRun", code: reason || "deferred", message: "The automatic switch did not run. Nothing was stopped." };
         case "failed": {
           const code = typeof result.failure === "string" ? result.failure.slice(0, 64) : "switchFailed";
@@ -932,16 +942,13 @@ export class SubBatonService {
         }
         case "uncertain":
           return { kind: "uncertain", code: "uncertain", message: "The automatic switch result is uncertain." };
-        case "stoppedNoSwitch":
-          // 0.9.6: agy sessions were stopped to renew candidates, then the final policy chose not to switch. The
-          // sessions are resumed like after a switch; only a result that names the stopped sessions is trusted.
-          return stoppedAny
-            ? { kind: "stoppedNoSwitch", code: "stoppedNoSwitch", message: "agy sessions were stopped to renew candidate accounts; no switch was needed." }
-            : { kind: "uncertain", code: "uncertain", message: "Unexpected automatic switch result after stopping agy sessions." };
         default:
+          // Sessions were stopped but nothing switched (stay, blocked, revalidated, deferred, held, and also off or
+          // paused when the setting changed during the renewal): the stopped agents are always reopened. Only a result
+          // with resume metadata is trusted; otherwise it is uncertain. Never "nothing was stopped".
+          if (stoppedAny) return stoppedNoSwitch();
+          if (result.outcome === "stoppedNoSwitch") return { kind: "uncertain", code: "uncertain", message: "Unexpected automatic switch result after stopping agy sessions." };
           // off, paused, held, stay, blocked, revalidated: the policy changed its mind; nothing ran.
-          if (result.stopProcesses === true && stoppedAny)
-            return { kind: "uncertain", code: "uncertain", message: "Unexpected automatic switch result after stopping agy sessions." };
           return { kind: "notRun", code: typeof result.outcome === "string" ? result.outcome.slice(0, 64) : "unknown", message: "The automatic switch no longer applies. Nothing was stopped." };
       }
     } finally {

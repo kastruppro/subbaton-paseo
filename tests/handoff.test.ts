@@ -156,6 +156,22 @@ test("agy automatic: stoppedNoSwitch reopens the stopped agents like a switch, w
   assert.deepEqual(h.affected, ["a1"]);
 });
 
+test("N-M2: an automatic agy handoff starts for renewal alone (no known target) and reopens the stopped agents", async () => {
+  const { cli, agents, coordinator, advance } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [proc(11)];
+  cli.plan = { ok: true, blockedOnlyByProcesses: true, target: null };
+  cli.autoOutcome = { kind: "stoppedNoSwitch", code: "stoppedNoSwitch", message: "ok", manualResumeRequired: true };
+  advance(61);
+  await coordinator.tick(agents);
+  assert.deepEqual(cli.autoRuns, [[11]]);
+  assert.deepEqual(agents.reloads, ["a1"]);
+  const h = coordinator.status().handoffs.agy!;
+  assert.equal(h.target, null);
+  assert.equal(h.phase, "done");
+  assert.match(h.message, /no switch/i);
+  assert.match(h.message, /no saved conversation/i, "N-L1: the owner sees why a thread may start fresh");
+});
 test("agy: only processes descended from the Paseo daemon count; anything else waits (fail closed)", async () => {
   const cases: [AgentSnapshot[], AgyProcessInfo[] | null, string][] = [
     [[agent("a1", "antigravity")], [proc(11), proc(12, [900, 1])], "agyOutsidePaseo"],

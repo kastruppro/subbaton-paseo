@@ -108,6 +108,13 @@ test("agy auto plan and run-once: fixed argv and every outcome mapped", async ()
   assert.deepEqual(cli.calls.at(-1)?.argv, ["agy", "auto", "plan", "--json"]);
   cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, targetIfProcessesStopped: target, executionEnabled: false }));
   assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null });
+  // N-M2: renewal needs the sessions stopped, even though no target is known yet
+  cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, stopReason: "renewCandidates", targetIfProcessesStopped: null, executionEnabled: true }));
+  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: true, target: null });
+  cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, stopReason: "renewCandidates", targetIfProcessesStopped: null, executionEnabled: false }));
+  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null }, "same owner settings as today");
+  cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, targetIfProcessesStopped: null, executionEnabled: true }));
+  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null }, "no target and no renewal reason: nothing to do");
   cli.on(["agy", "auto", "plan"], ok({ outcome: "x" }));
   assert.deepEqual(await service.agyAutoPlan(), { ok: false });
 
@@ -144,6 +151,15 @@ test("agy auto plan and run-once: fixed argv and every outcome mapped", async ()
   assert.equal((await run(ok({ ...stoppedNoSwitch, manualResumeRequired: true }))).kind, "stoppedNoSwitch", "manual resume is the owner's, the Paseo agents are still reopened");
   // no stopped session reported: nothing to resume and the outcome is not trusted
   assert.equal((await run(ok({ ...stoppedNoSwitch, stoppedProcesses: [], resumeCommands: [] }))).kind, "uncertain");
+  // N-M1: sessions were stopped, then the nested run found auto off or paused (the core does not rewrite those): still reopened.
+  for (const outcome of ["paused", "off", "held", "stay", "revalidated"])
+    assert.equal((await run(ok({ ...stoppedNoSwitch, outcome }))).kind, "stoppedNoSwitch", outcome);
+  assert.equal((await run(ok({ ...stoppedNoSwitch, outcome: "deferred", reason: "busy" }))).kind, "stoppedNoSwitch", "never notRun when sessions were stopped");
+  const noMeta = { ...stoppedNoSwitch, outcome: "paused" } as Record<string, unknown>;
+  delete noMeta.resumeCommands; delete noMeta.manualResumeRequired;
+  assert.equal((await run(ok(noMeta))).kind, "uncertain", "stopped sessions without resume metadata are not trusted");
+  assert.equal((await run(ok({ outcome: "paused" }))).kind, "notRun", "nothing stopped: still notRun");
+  assert.equal((await run(ok({ ...stoppedNoSwitch, manualResumeRequired: true }))).manualResumeRequired, true);
   assert.equal((await run(ok({ outcome: "uncertain", reason: "replanFailed", stoppedProcesses: stoppedNoSwitch.stoppedProcesses }))).kind, "uncertain");
 });
 

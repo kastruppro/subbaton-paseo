@@ -1060,7 +1060,7 @@ test("log: a Codex switch logs the adoption with counts, each reload, the queued
   await coordinator.request("codex", target);
   await coordinator.tick(agents);
   await coordinator.tick(agents);
-  assert.ok(hasLine(logs, /switch adopted provider=codex key=txn:T7 trigger=manual agents idle=1 error=1 running=1 closed=1 \(closed: not loaded, starts on the new login when opened\)/), logs.join("\n"));
+  assert.ok(hasLine(logs, /switch adopted provider=codex key=txn:T7 trigger=manual agents \(counted before the switch\) idle=1 error=1 running=1 closed=1 \(closed: not loaded, starts on the new login when opened\)/), logs.join("\n"));
   assert.ok(hasLine(logs, /reload started agent=c1aaaaaa status=idle key=txn:T7/));
   assert.ok(hasLine(logs, /reload finished agent=c1aaaaaa/));
   assert.ok(hasLine(logs, /reload started agent=c2bbbbbb status=error/));
@@ -1070,7 +1070,7 @@ test("log: a Codex switch logs the adoption with counts, each reload, the queued
   agents.agents[2] = agent("c3cccccccc", "codex");
   await coordinator.tick(agents);
   assert.ok(hasLine(logs, /reload finished agent=c3cccccc/));
-  assert.ok(hasLine(logs, /reopen finished provider=codex key=txn:T7 reloaded=3 skipped=0 failed=0 closed=1 \(not loaded, starts on the new login when opened\)/), logs.join("\n"));
+  assert.ok(hasLine(logs, /reopen finished provider=codex key=txn:T7 reloaded=3 skipped=0 failed=0 closed=1 \(closed: not loaded, starts on the new login when opened\)/), logs.join("\n"));
   assertLogSafe(logs);
 });
 test("log: a failed reload, a vanished agent and a reload done by the recovery are logged with the reason", async () => {
@@ -1116,4 +1116,35 @@ test("log: the agy renewal-only path, stoppedNoSwitch and the hold are logged", 
   await coordinator.tick(agents);
   assert.equal(logs.filter((l) => /agy renewal-only plan skipped/.test(l)).length, 1, "the hold is logged once");
   assertLogSafe(logs);
+});
+
+test("H-L1: after a manual Reopen the failed count never goes negative", async () => {
+  // an agy handoff whose agent disappears ends failed (gone=1); Reopen agents with the agent still missing must not log failed=-1
+  const ctx = setup();
+  ctx.agents.agents = [agent("x1", "antigravity")];
+  ctx.cli.processes = [proc(11)];
+  await ctx.coordinator.request("agy", target);
+  const original = ctx.agents.list.bind(ctx.agents);
+  let hide = false;
+  ctx.agents.list = async () => (hide ? [] : original());
+  const switchOriginal = ctx.cli.switchAccount.bind(ctx.cli);
+  ctx.cli.switchAccount = async (p, t, o) => { hide = true; return switchOriginal(p, t, o); };
+  await ctx.coordinator.tick(ctx.agents);
+  await ctx.coordinator.tick(ctx.agents);
+  assert.equal(ctx.coordinator.status().handoffs.agy?.phase, "failed");
+  await ctx.coordinator.control("agy", "reopen");
+  await ctx.coordinator.tick(ctx.agents);
+  assert.ok(!ctx.logs.some((l) => /failed=-\d/.test(l)), ctx.logs.join("\n"));
+  const finished = ctx.logs.filter((l) => /reopen finished/.test(l));
+  assert.equal(finished.length, 2, ctx.logs.join("\n"));
+  assert.ok(finished.every((l) => /skipped=1 \(1 gone or archived\) failed=0/.test(l)), finished.join("\n"));
+});
+test("H-L3: agy lines do not claim a closed agent starts on the new login", async () => {
+  const { cli, agents, coordinator, logs } = setup();
+  agents.agents = [agent("g1", "antigravity"), agent("g2", "antigravity", "closed")];
+  cli.processes = [proc(11)];
+  await coordinator.request("agy", target);
+  await coordinator.tick(agents);
+  assert.ok(logs.some((l) => /switch adopted provider=agy .*agents \(counted before the switch\) idle=1 error=0 running=0 closed=1 \(closed: not running\)/.test(l)), logs.join("\n"));
+  assert.ok(!logs.some((l) => /provider=agy/.test(l) && /starts on the new login/.test(l)), logs.join("\n"));
 });

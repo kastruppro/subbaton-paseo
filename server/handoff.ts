@@ -153,6 +153,8 @@ const countByStatus = (agents: AgentSnapshot[]) => {
   }
   return counts;
 };
+/** A closed Codex agent starts on whichever login is active when it is opened; a closed agy agent is simply not running. */
+const closedNote = (provider: string) => (provider === "codex" ? "(closed: not loaded, starts on the new login when opened)" : "(closed: not running)");
 const MANUAL_RESUME_NOTE = " A stopped session had no saved conversation ID (no saved conversation), so that agent may start without its thread.";
 /** A Codex handoff that already switched and only waits to reload running agents one by one may be taken over by a newer switch. */
 const supersedable = (h: Handoff | null) => !!h && h.provider === "codex" && h.phase === "reopening";
@@ -386,6 +388,8 @@ export class HandoffCoordinator {
         if (!["uncertain", "failed"].includes(h.phase) || pending.length === 0)
           return { result: refuse("nothingToReopen", "No closed agents are waiting to be reopened."), handoff: h };
         // Explicit owner decision after inspecting the login on the Mac.
+        const stat = this.stats.get(h.id);
+        if (stat) stat.gone = 0; // the gone agents are counted again if they are still missing
         this.update(h, { phase: "reopening", failedReopen: [], deadline: this.now() + (await this.settings()).idleWaitMinutes * 60, code: "reopenRequested", message: "Reopening the closed agents as requested." });
       } else {
         if (!terminal(h)) return { result: refuse("active", "A running handoff cannot be dismissed; cancel it while it waits."), handoff: h };
@@ -475,6 +479,7 @@ export class HandoffCoordinator {
   /** Ends an open handoff that a newer one takes over. Only claims coverage when the newer handoff will reload. */
   private supersede(old: Handoff, newerReloads: boolean) {
     const open = old.affected.filter((id) => !old.reopened.includes(id) && !old.failedReopen.includes(id)).length;
+    this.stats.delete(old.id);
     this.say(`superseded provider=${old.provider} key=${shortKey(old.switchKey ?? old.id)} by a newer switch, ${open} ${open === 1 ? "agent" : "agents"} not yet reloaded${newerReloads ? ", the newer switch reloads them" : ", the newer switch does not reload (setting off)"}`);
     this.update(old, {
       phase: "done",
@@ -642,7 +647,7 @@ export class HandoffCoordinator {
       // a successful daemon restart is not required (and is never enabled for this).
       const counts = countByStatus(mine);
       this.stats.set(h.id, { closed: counts.closed, byRecovery: 0, gone: 0 });
-      this.say(`switch adopted provider=codex key=${shortKey(h.switchKey ?? h.id)} trigger=${h.trigger} agents idle=${counts.idle} error=${counts.error} running=${counts.running} closed=${counts.closed} (closed: not loaded, starts on the new login when opened)${affected.length === 0 ? ", no reload (setting off or none to reload)" : ""}`);
+      this.say(`switch adopted provider=codex key=${shortKey(h.switchKey ?? h.id)} trigger=${h.trigger} agents (counted before the switch) idle=${counts.idle} error=${counts.error} running=${counts.running} closed=${counts.closed} ${closedNote(h.provider)}${affected.length === 0 ? ", no reload (setting off or none to reload)" : ""}`);
       if (h.switchKey && h.switchTarget) this.onCodexAdopted?.(h.switchKey, h.switchTarget, h.switchedAt);
       return;
     }
@@ -762,7 +767,7 @@ export class HandoffCoordinator {
         if (out.kind === "switched") {
           const counts = countByStatus(mine);
           this.stats.set(h.id, { closed: counts.closed, byRecovery: 0, gone: 0 });
-          this.say(`switch adopted provider=${h.provider} key=${shortKey(h.switchKey ?? h.id)} trigger=${h.trigger} agents idle=${counts.idle} error=${counts.error} running=${counts.running} closed=${counts.closed} (closed: not loaded, starts on the new login when opened)`);
+          this.say(`switch adopted provider=${h.provider} key=${shortKey(h.switchKey ?? h.id)} trigger=${h.trigger} agents (counted before the switch) idle=${counts.idle} error=${counts.error} running=${counts.running} closed=${counts.closed} ${closedNote(h.provider)}`);
         } else this.say(`switch not needed provider=${h.provider} key=${shortKey(h.switchKey ?? h.id)}, that account was already active, ${affected.length} ${affected.length === 1 ? "agent" : "agents"} left as they are`);
         if (h.provider === "codex" && out.kind === "switched" && out.transaction)
           this.onCodexAdopted?.("txn:" + out.transaction, h.target!, this.now());
@@ -848,7 +853,7 @@ export class HandoffCoordinator {
     }
     const finished = (extra = "") => {
       const loaded = h.reopened.length - stat.byRecovery;
-      this.say(`reopen finished provider=${h.provider} key=${logKey} reloaded=${loaded} skipped=${stat.byRecovery + stat.gone}${stat.byRecovery ? ` (${stat.byRecovery} by the limited-agent recovery)` : ""}${stat.gone ? ` (${stat.gone} gone or archived)` : ""} failed=${h.failedReopen.length - stat.gone} closed=${stat.closed} (not loaded, starts on the new login when opened)${extra}`);
+      this.say(`reopen finished provider=${h.provider} key=${logKey} reloaded=${loaded} skipped=${stat.byRecovery + stat.gone}${stat.byRecovery ? ` (${stat.byRecovery} by the limited-agent recovery)` : ""}${stat.gone ? ` (${stat.gone} gone or archived)` : ""} failed=${Math.max(0, h.failedReopen.length - stat.gone)} closed=${stat.closed} ${closedNote(h.provider)}${extra}`);
     };
     if (waiting > 0) {
       // Per-agent Codex reloads have no deadline: a running agent is reloaded whenever it becomes idle, for as long as
@@ -857,6 +862,7 @@ export class HandoffCoordinator {
       if (!perAgent && this.now() > h.deadline) {
         const closed = h.provider === "agy";
         finished(`, ${waiting} still running after the wait, not reloaded`);
+        this.stats.delete(h.id);
         this.update(h, {
           phase: closed ? "failed" : "done",
           waitingFor: 0,
@@ -872,6 +878,7 @@ export class HandoffCoordinator {
     }
     const failed = h.failedReopen.length;
     finished();
+    this.stats.delete(h.id);
     this.update(h, {
       phase: failed ? "failed" : "done",
       waitingFor: 0,

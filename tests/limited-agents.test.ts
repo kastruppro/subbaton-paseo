@@ -119,13 +119,69 @@ test("a newer turn, a cancellation, an archive or user activity invalidates the 
   }
 });
 
-test("a limit that ended after the switch was adopted is not recovered (second limited account)", async () => {
+test("a limit that ended after the switch was adopted is not recovered by that switch (second limited account)", async () => {
   const r = make(), port = new Fake();
   port.add("a");
   await adopt(r);
   await r.recovery.turnBefore(codexAgent("a"), "t1");
   await r.recovery.turnAfter(codexAgent("a"), "t1", failed());
   await r.recovery.run(port);
+  assert.deepEqual(port.calls, []);
+});
+
+test("owner incident: a limit after an adoption is kept and continued once by the next adoption", async () => {
+  const r = make(), port = new Fake();
+  port.add("a"); port.add("b");
+  await adopt(r, "txn:1");
+  for (const id of ["a", "b"]) {
+    await r.recovery.turnBefore(codexAgent(id), "t1");
+    await r.recovery.turnAfter(codexAgent(id), "t1", failed());
+  }
+  r.clock.t += 10;
+  await r.recovery.run(port);
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, [], "the same switch never continues them");
+  assert.equal(r.logs.filter((l) => /waiting for the next switch agent=a/.test(l)).length, 1, "logged once");
+  assert.ok(!has(r, /skipped agent=a/));
+  r.account.v = "acct-B";
+  await adopt(r, "txn:2");
+  await r.recovery.run(port);
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, ["reload:a", `send:a:${continuationText}`, "reload:b", `send:b:${continuationText}`]);
+});
+
+test("re-adopting the same switch does not release a waiting candidate", async () => {
+  const r = make(), port = new Fake();
+  port.add("a");
+  await adopt(r, "txn:1");
+  await limit(r, "a");
+  await adopt(r, "txn:1");
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, []);
+});
+
+test("user activity drops a candidate that waits for the next switch", async () => {
+  const r = make(), port = new Fake();
+  port.add("a");
+  await adopt(r, "txn:1");
+  await limit(r, "a");
+  await r.recovery.run(port);
+  await r.recovery.turnBefore(codexAgent("a"), "t2");
+  await adopt(r, "txn:2");
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, []);
+  assert.ok(has(r, /candidate dropped agent=a reason=turn started again/));
+});
+
+test("a plugin restart loses a waiting candidate (in-memory by design)", async () => {
+  const store = memoryStore();
+  const r = make({ store }), port = new Fake();
+  port.add("a");
+  await adopt(r, "txn:1");
+  await limit(r, "a");
+  const again = make({ store });
+  await adopt(again, "txn:2");
+  await again.recovery.run(port);
   assert.deepEqual(port.calls, []);
 });
 
@@ -524,14 +580,14 @@ test("log: an agent the owner stopped or restarted is dropped with the reason", 
   assert.ok(has(archived, /candidate dropped agent=a reason=archived/));
 });
 
-test("log: a limit that ended after the switch (second exhausted account) is skipped with the reason", async () => {
+test("log: a limit that ended after the switch (second exhausted account) waits for the next switch", async () => {
   const r = make(), port = new Fake();
   port.add("a");
   await adopt(r, "txn:T9");
   await r.recovery.turnBefore(codexAgent("a"), "t1");
   await r.recovery.turnAfter(codexAgent("a"), "t1", failed());
   await r.recovery.run(port);
-  assert.ok(has(r, /skipped agent=a reason=limit ended after the switch/));
+  assert.ok(has(r, /waiting for the next switch agent=a/));
   assert.ok(!has(r, /continuation sent/));
   assertSafe(r);
 });

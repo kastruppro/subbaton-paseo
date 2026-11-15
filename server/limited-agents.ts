@@ -220,6 +220,8 @@ export class LimitedAgentRecovery {
       if (!expectedAccount || typeof expectedAccount !== "string") return refuse("switch target unknown");
       if (!current) return refuse("active login unknown");
       if (expectedAccount !== current) return refuse(`target ${expectedAccount} is not the active login ${current}`);
+      // The same switch adopted again keeps its original time, so candidates waiting for the next switch stay waiting.
+      if (this.pending?.key === key && this.pending.accountId === current) return;
       this.pending = { key, accountId: current, since: Math.min(this.now(), switchedAt ?? Infinity) };
       this.say(`switch adopted key=${shortKey(key)} account=${current} candidates=${this.candidates.size}`);
     });
@@ -229,7 +231,10 @@ export class LimitedAgentRecovery {
     return this.pending !== null && this.candidates.size > 0;
   }
 
-  /** Continue every eligible candidate; busy agents wait for a later run. */
+  /**
+   * Continue every eligible candidate; busy agents wait for a later run. Candidates whose limit ended after
+   * the pending switch stay in memory for the next adopted switch (lost on a plugin restart, by design).
+   */
   run(port: AgentPort | null): Promise<void> {
     return this.serial(async () => {
       await this.init();
@@ -268,7 +273,15 @@ export class LimitedAgentRecovery {
       if (this.candidates.get(agentId) === candidate) this.candidates.delete(agentId);
       if (reason) this.say(`skipped agent=${who} reason=${reason}`);
     };
-    if (candidate.at >= pending.since) return drop("limit ended after the switch");
+    if (candidate.at >= pending.since) {
+      // The limit hit the current (already switched) login: keep it for the NEXT adopted switch.
+      const waitId = `next|${agentId}|${candidate.turnId}`;
+      if (!this.waitLogged.has(waitId)) {
+        this.waitLogged.add(waitId);
+        this.say(`waiting for the next switch agent=${who}`);
+      }
+      return;
+    }
     const id = `${pending.key}|${agentId}|${candidate.turnId}`;
     if (this.state.consumed.includes(id)) return drop("already consumed for this switch");
     const first = await this.eligible(port, pending, agentId, candidate, false);

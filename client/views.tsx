@@ -810,7 +810,7 @@ function ProviderRow({
           {paidUsageLines(provider, current).map((line) => (
             <View key={line.label} style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
               {line.stale && <Icon name="Clock" size={11} color={palette.muted} />}
-              <Text selectable style={{ fontSize: 11.5, color: line.stale ? palette.muted : palette.text, flex: 1 }}>{line.text}</Text>
+              <Text selectable accessibilityLabel={line.spoken} style={{ fontSize: 11.5, color: line.stale ? palette.muted : palette.text, flex: 1 }}>{line.text}</Text>
             </View>
           ))}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3, marginBottom: 8 }}>

@@ -1,13 +1,13 @@
 import type { Account, PaidUsage, Provider } from "../shared/contracts.js";
 import { relativeAge } from "./display.js";
-import { formatCredits, formatCreditsWhole } from "./credits-format.js";
+import { formatCredits, spokenCredits } from "./credits-format.js";
 
 /** Paid availability is fresh for at most 180 seconds, even if the CLI's flag says fresh. */
 export const paidFreshSeconds = 180;
 export const paidStale = (paid: PaidUsage, now = Date.now() / 1000) =>
   paid.stale || !(now - paid.fetchedAt <= paidFreshSeconds);
 
-export type PaidLine = { label: string; text: string; stale: boolean };
+export type PaidLine = { label: string; text: string; stale: boolean; spoken: string };
 
 const num = (value: number) => String(value);
 /** Codex balance in credit units, exactly as the issuer reported it. */
@@ -33,7 +33,7 @@ export function paidSpokenValue(provider: Provider, paid: PaidUsage | undefined)
   if (value === null || !paid) return null;
   if (provider !== "codex") return value;
   if (paid.unlimited === true) return "unlimited";
-  if (paid.balance !== undefined && paid.balance.trim() !== "") return `${formatCreditsWhole(paid.balance)} credits`;
+  if (paid.balance !== undefined && paid.balance.trim() !== "") return spokenCredits(paid.balance);
   return `${value} credits`;
 }
 
@@ -50,14 +50,17 @@ export function paidUsageLines(
     const prefix = stale ? "Credits (stale): " : "Credits: ";
     const balance = codexBalance(paid);
     let text: string;
-    if (balance === "unlimited") text = prefix + "unlimited";
+    let spoken: string;
+    if (balance === "unlimited") (text = prefix + "unlimited"), (spoken = "Credits, unlimited");
     else if (balance !== null) {
       const shown = formatCredits(balance);
       const zero = paid.hasCredits === false && shown === "0";
       text = zero ? prefix + `none (${shown} credits)` : `${prefix}${stale ? "~" : ""}${shown} credits`;
-    } else if (paid.hasCredits === false) text = prefix + "none";
-    else if (paid.hasCredits === true) text = prefix + "available; balance unknown";
-    else text = prefix + "unknown";
+      spoken = zero ? "Credits, none" : `Credits, ${stale ? "about " : ""}${spokenCredits(balance)}${stale ? ", stale" : ""}`;
+    } else if (paid.hasCredits === false) (text = prefix + "none"), (spoken = "Credits, none");
+    else if (paid.hasCredits === true) (text = prefix + "available; balance unknown"), (spoken = "Credits, available, balance unknown");
+    else (text = prefix + "unknown"), (spoken = "Credits, unknown");
+    if (stale && (balance === null || balance === "unlimited")) spoken += ", stale";
     const local = paid.approxLocalMessages, cloud = paid.approxCloudMessages;
     if (balance !== null && balance !== "unlimited" && (local !== undefined || cloud !== undefined)) {
       const parts = [
@@ -65,33 +68,29 @@ export function paidUsageLines(
         cloud !== undefined ? `${num(cloud)} cloud` : null,
       ].filter(Boolean);
       text += ` · estimate: about ${parts.join(" or ")} messages`;
+      spoken += `, estimate: about ${parts.join(" or ")} messages`;
     }
-    lines.push({ label: "Credits", text, stale });
+    lines.push({ label: "Credits", text, stale, spoken });
   } else if (paid && provider === "claude" && paid.kind === "extraUsage") {
     const stale = paidStale(paid, now);
     const tail = stale ? " (stale)" : "";
-    lines.push({
-      label: "Extra usage",
-      stale,
-      text:
-        paid.enabled === true
-          ? "Extra usage enabled; funds unknown" + tail
-          : paid.enabled === false
-            ? "Extra usage off" + tail
-            : "Extra usage: unknown" + tail,
-    });
-    if (paid.usedCredits !== undefined)
-      lines.push({
-        label: "Extra usage amount",
-        stale,
-        text:
-          paid.monthlyLimit !== undefined
-            ? `Used ${num(paid.usedCredits)} of ${num(paid.monthlyLimit)} monthly cap (units unknown)`
-            : `Used ${num(paid.usedCredits)} (units unknown); monthly cap unknown`,
-      });
+    const extra =
+      paid.enabled === true
+        ? "Extra usage enabled; funds unknown" + tail
+        : paid.enabled === false
+          ? "Extra usage off" + tail
+          : "Extra usage: unknown" + tail;
+    lines.push({ label: "Extra usage", stale, text: extra, spoken: extra });
+    if (paid.usedCredits !== undefined) {
+      const used =
+        paid.monthlyLimit !== undefined
+          ? `Used ${num(paid.usedCredits)} of ${num(paid.monthlyLimit)} monthly cap (units unknown)`
+          : `Used ${num(paid.usedCredits)} (units unknown); monthly cap unknown`;
+      lines.push({ label: "Extra usage amount", stale, text: used, spoken: used });
+    }
   }
   if (provider === "codex" && account.resetCreditsAvailable !== undefined)
-    lines.push({ label: "Banked resets", text: `Banked resets: ${account.resetCreditsAvailable}`, stale: false });
+    lines.push({ label: "Banked resets", text: `Banked resets: ${account.resetCreditsAvailable}`, stale: false, spoken: `Banked resets: ${account.resetCreditsAvailable}` });
   return lines;
 }
 

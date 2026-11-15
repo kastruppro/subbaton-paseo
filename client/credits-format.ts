@@ -26,7 +26,12 @@ export function formatCredits(raw: string): string {
   const whole = digits.slice(0, -2);
   const decimals = digits.slice(-2).replace(/0+$/, "");
   const body = group(whole) + (decimals ? "." + decimals : "");
-  return p.negative && cents !== 0n ? "-" + body : body;
+  if (cents === 0n) {
+    // A positive balance below half a cent must not read as zero credits.
+    const positive = !p.negative && /[1-9]/.test(p.int + p.frac);
+    return positive ? "<0.01" : "0";
+  }
+  return p.negative ? "-" + body : body;
 }
 
 /** Whole credits for speech: "71023.5086225000" -> "71,023" (truncated, not rounded). */
@@ -35,4 +40,13 @@ export function formatCreditsWhole(raw: string): string {
   if (!p) return raw;
   const whole = BigInt(p.int);
   return (p.negative && whole !== 0n ? "-" : "") + group(whole.toString());
+}
+
+/** Spoken form: whole credits, or "less than 1 credit" for a positive balance below 1. */
+export function spokenCredits(raw: string): string {
+  const p = parse(raw);
+  if (!p) return `${raw} credits`;
+  const whole = formatCreditsWhole(raw);
+  if (!p.negative && whole === "0" && /[1-9]/.test(p.int + p.frac)) return "less than 1 credit";
+  return whole === "1" ? "1 credit" : `${whole} credits`;
 }

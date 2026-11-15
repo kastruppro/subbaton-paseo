@@ -78,10 +78,8 @@ test("routine successes disappear; failures stay short and preserve recovery ins
       message: "Original cause. Run recovery.",
     })?.includes("recovery"),
   );
-  assert.equal(
-    shortWarning("agy", "partial-groups", ["Long explanation"]),
-    "Gemini quota not reported by Google",
-  );
+  // The amber "Gemini quota not reported by Google" warning is gone (neutral "Gemini: not available" line instead).
+  assert.equal(shortWarning("agy", "partial-groups", ["Long explanation"]), null);
 });
 test("focus ring requires focus-visible, never plain click focus", () => {
   assert.equal(

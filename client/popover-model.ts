@@ -11,9 +11,15 @@ import { accountTone, providerLabel, severity, windowPresentation } from "./disp
 
 const groupName = (id: string) =>
   id.startsWith("gemini:") ? "Gemini" : id.startsWith("claude-gpt:") ? "C/GPT" : "";
+/** The Gemini model-quota row: its window length is unknown, so it has no duration, pace tick or reset time. */
+export const isModelQuota = (w: Pick<Window, "id" | "quotaSource" | "window">) =>
+  w.id === "gemini:unknown" || (w.quotaSource === "models" && w.window === "unknown");
+export const windowLongLabel = (provider: Provider, w: Window) =>
+  provider === "agy" && isModelQuota(w) ? "Gemini (model quota)" : windowLabel(provider, w);
 /** Shared wording: 5h / 7d rolling windows, model or group name plus duration. */
 export function windowLabel(provider: Provider, window: Window): string {
   const id = window.id;
+  if (provider === "agy" && isModelQuota(window)) return "Gemini";
   if (provider === "claude") {
     if (id === "five_hour") return "5h";
     if (id === "seven_day") return "7d";
@@ -40,12 +46,17 @@ export function windowLabel(provider: Provider, window: Window): string {
 
 /** Windows shown by the collapsed row: 5h + 7d (agy: its two 5h groups). */
 export function miniWindows(provider: Provider, windows: Window[]): Window[] {
-  const ids =
+  const ids: string[] =
     provider === "claude"
       ? ["five_hour", "seven_day"]
       : provider === "codex"
         ? ["codex:primary_window", "codex:secondary_window"]
         : ["gemini:5h", "claude-gpt:5h"];
+  // Gemini slot: a real Gemini window wins, otherwise the model-quota row.
+  if (provider === "agy" && !windows.some((w) => w.id === "gemini:5h")) {
+    const model = windows.find(isModelQuota);
+    if (model) ids[0] = model.id;
+  }
   const picked = ids.flatMap((id) => windows.filter((w) => w.id === id));
   return picked.length ? picked : windows.slice(0, 2);
 }
@@ -220,4 +231,11 @@ export function expandedSections(
     others,
     best: showBestSwitch(provider, others.length),
   };
+}
+
+/** One neutral grey line (never a warning) when an agy account has no Gemini data at all. */
+export function geminiNotice(provider: Provider, account: Account): { text: string; tone: "muted" } | null {
+  if (provider !== "agy") return null;
+  const has = account.windows.some((w) => w.id.startsWith("gemini:") || isModelQuota(w));
+  return has ? null : { text: "Gemini: not available", tone: "muted" };
 }

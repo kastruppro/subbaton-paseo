@@ -61,6 +61,9 @@ import {
   expandedSections,
   switchChoices,
   windowLabel,
+  windowLongLabel,
+  isModelQuota,
+  geminiNotice,
   type RowLine,
   type Tone,
 } from "./popover-model.js";
@@ -395,21 +398,27 @@ function PaceBar({
 }) {
   const palette = usePalette();
   const view = windowPresentation(provider, window, warning, danger, offline);
+  const modelRow = provider === "agy" && isModelQuota(window);
   const label = windowLabel(provider, window),
     value = window.usedPercent;
   return (
     <View style={{ marginTop: 6, gap: 3 }}>
+      {modelRow && (
+        <Text style={{ color: palette.muted, fontSize: 12 }}>{windowLongLabel(provider, window)}</Text>
+      )}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <Text
-          numberOfLines={1}
-          style={{
-            width: 62,
-            color: palette.muted,
-            fontSize: 12,
-          }}
-        >
-          {label}
-        </Text>
+        {!modelRow && (
+          <Text
+            numberOfLines={1}
+            style={{
+              width: 62,
+              color: palette.muted,
+              fontSize: 12,
+            }}
+          >
+            {label}
+          </Text>
+        )}
         <View
           accessible
           accessibilityRole="progressbar"
@@ -473,7 +482,7 @@ function PaceBar({
           flexDirection: "row",
           alignItems: "center",
           gap: 3,
-          marginLeft: 72,
+          marginLeft: modelRow ? 0 : 72,
         }}
       >
         {view.clock && <Icon name="Clock" size={11} color={palette.muted} />}
@@ -681,6 +690,7 @@ function ProviderRow({
   ];
   const locked = busy || !!base?.disableSwitching;
   const mini = current ? miniWindows(provider, current.windows) : [];
+  const geminiLine = current ? geminiNotice(provider, current) : null;
   const sections = expandedSections(provider, accounts, !!base?.disableSwitching);
   const others = sections.others;
   const chosen = others.find((a) => a.id === choice);
@@ -734,11 +744,12 @@ function ProviderRow({
           {current?.alias ?? ""}
         </Text>
       </Pressable>
-      {!open && mini.length > 0 && (
+      {!open && (mini.length > 0 || geminiLine) && (
         <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 2, paddingLeft: 31, paddingTop: 5 }}>
           {mini.map((w) => (
             <MiniWindow key={w.id} {...{ provider, window: w, warning, danger, offline }} />
           ))}
+          {geminiLine && <Text style={{ fontSize: 12, color: palette.muted }}>{geminiLine.text}</Text>}
         </View>
       )}
       {lines.map((line) => (
@@ -784,6 +795,7 @@ function ProviderRow({
           {windowsAll.length === 0 && (
             <Text style={{ color: palette.muted, fontSize: 12 }}>Usage unknown. No quota is assumed.</Text>
           )}
+          {geminiLine && <Text style={{ color: palette.muted, fontSize: 12, marginTop: 6 }}>{geminiLine.text}</Text>}
           {warnLine && (
             <View style={{ flexDirection: "row", gap: 4, alignItems: "center", marginTop: 4 }} accessibilityLabel={(current.warnings ?? []).join(". ")}>
               <Icon name="TriangleAlert" size={12} color={palette.warning} />

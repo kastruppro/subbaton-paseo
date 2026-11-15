@@ -87,6 +87,7 @@ export function windowTitle(id: string, label?: string) {
     seven_day_sonnet: "Sonnet",
     "codex:primary_window": "Primary window",
     "codex:secondary_window": "Secondary window",
+    "gemini:unknown": "Gemini (model quota)",
   };
   return (
     known[id] ??
@@ -317,8 +318,8 @@ export function shortWarning(
   status: string | null | undefined,
   warnings: string[] = [],
 ): string | null {
-  if (provider === "agy" && status === "partial-groups")
-    return "Gemini quota not reported by Google";
+  // A partial agy summary is no warning: the Gemini row (or a neutral "Gemini: not available" line) says it.
+  if (provider === "agy" && status === "partial-groups") return null;
   if (status) return "Quota summary unavailable; some readings are stale";
   return warnings.length ? "Account needs attention; expand for details" : null;
 }

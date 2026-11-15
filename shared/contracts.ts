@@ -14,6 +14,10 @@ export const windowSchema = z.object({
   inferred: z.boolean().optional().default(false),
   fetchedAt: time,
   windowSeconds: z.number().finite().nullable().optional(),
+  /** 0.9.2: "models" marks the Gemini model-quota row; absent on older payloads. */
+  quotaSource: z.string().max(32).optional().catch(undefined),
+  /** "unknown" when no window length is known (model-quota row). */
+  window: z.string().max(32).optional().catch(undefined),
 });
 /** 0.9.0 optional fields: anything malformed is treated as absent (unknown), never as zero or unlimited. */
 const optionalBool = z.boolean().optional().catch(undefined);

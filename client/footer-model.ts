@@ -1,7 +1,7 @@
 import type { Account, Provider, Window } from "../shared/contracts.js";
 import { maxFooterItems } from "../shared/contracts.js";
 import { percentText, providerLabel, severity, stale } from "./display.js";
-import { windowLabel } from "./popover-model.js";
+import { isModelQuota, windowLabel } from "./popover-model.js";
 import { paidFooterValue, paidStale } from "./paid-model.js";
 
 /** Three equal columns like Paseo's CPU / Memory / Disk box; 1-3 items one row, 4-6 two rows. */
@@ -71,7 +71,9 @@ export function footerCell(
         opts.narrow,
       );
   const spoken = expand(
-    window
+    window && item.provider === "agy" && isModelQuota(window)
+      ? "Gemini model quota"
+      : window
       ? windowLabel(item.provider, window)
       : windowLabel(item.provider, { id: item.windowId, label: item.windowId, usedPercent: null, resetsAt: null, stale: false, inferred: false, fetchedAt: null }),
   );

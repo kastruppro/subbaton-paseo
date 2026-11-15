@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { statusSchema, accountSchema, displaySchema, type Account } from "../shared/contracts.js";
 import { paidUsageLines, attentionLine } from "../client/paid-model.js";
 import { footerCell } from "../client/footer-model.js";
-import { groupFor, creditsFallbackTitle, creditsFallbackHelp, setDraft, draftChanges } from "../client/settings-model.js";
+import { groupFor, isCreditsFallback, creditsFallbackTitle, creditsFallbackHelp, setDraft, draftChanges } from "../client/settings-model.js";
 
 const read = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures-v090/${name}`, import.meta.url), "utf8"));
 const accounts = read("accounts.json") as Record<string, unknown>;
@@ -105,14 +105,16 @@ test("footer selection persistence keeps the Credits item", () => {
 });
 
 test("Credits fallback setting: label, help, group and boolean round trip", () => {
-  assert.equal(groupFor("creditsFallback"), "Automatic switching");
+  assert.equal(groupFor("creditsFallback"), "Other settings", "only the CLI path auto.creditsFallback is recognised");
+  assert.equal(isCreditsFallback("auto.creditsFallback"), true);
+  assert.equal(isCreditsFallback("creditsFallback"), false);
   assert.equal(groupFor("auto.creditsFallback"), "Automatic switching");
   assert.equal(creditsFallbackTitle(true), "Credits fallback: On");
   assert.equal(creditsFallbackTitle(false), "Credits fallback: Off");
   assert.match(creditsFallbackHelp(), /official CLI may automatically consume paid usage/);
   const section = {} as never;
-  let draft = setDraft({}, section, ["creditsFallback"], false, true);
-  assert.deepEqual(draftChanges(draft), [{ path: ["creditsFallback"], value: false }]);
-  draft = setDraft(draft, section, ["creditsFallback"], true, true);
+  let draft = setDraft({}, section, ["auto", "creditsFallback"], false, true);
+  assert.deepEqual(draftChanges(draft), [{ path: ["auto", "creditsFallback"], value: false }]);
+  draft = setDraft(draft, section, ["auto", "creditsFallback"], true, true);
   assert.deepEqual(draftChanges(draft), []);
 });

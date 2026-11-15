@@ -136,14 +136,8 @@ function FooterCellView({
   cell: FooterCell;
 }) {
   const palette = usePalette();
-  const color =
-    cell.kind === "stale" || cell.kind === "unknown"
-      ? palette.muted
-      : cell.tone === "danger"
-        ? palette.danger
-        : cell.tone === "warning"
-          ? palette.warning
-          : palette.text;
+  // Same token as Paseo's CPU box values; stale and unknown stay readable (clock glyph and ~ mark them).
+  const color = cell.textTone === "danger" ? palette.danger : cell.textTone === "warning" ? palette.warning : palette.text;
   return (
     <View
       style={{
@@ -157,7 +151,7 @@ function FooterCellView({
       }}
     >
       <Icon name={providerIcon[provider]} size={13} color={palette.muted} />
-      <Text numberOfLines={1} style={{ fontSize: 12, color: palette.muted, flexShrink: 0 }}>
+      <Text numberOfLines={1} style={{ fontSize: 12, color: palette.text, flexShrink: 0 }}>
         {cell.label}
       </Text>
       {!cell.meter ? (
@@ -876,7 +870,7 @@ function ProviderRow({
                       ))}
                     </View>
                     {provider !== "claude" && (
-                      <Text style={{ fontSize: 11.5, color: palette.muted, marginTop: 7 }}>
+                      <Text style={{ fontSize: 11.5, color: palette.text, marginTop: 7 }}>
                         {idleExplanation(provider, restartCodexDaemon)}
                       </Text>
                     )}
@@ -988,7 +982,6 @@ function PopoverContent(
           numberOfLines={1}
           style={{
             color: palette.muted,
-            opacity: updatedAt && Date.now() / 1000 - updatedAt > 180 ? 0.65 : 1,
             fontSize: 12,
           }}
         >

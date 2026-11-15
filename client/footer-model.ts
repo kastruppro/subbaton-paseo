@@ -29,6 +29,8 @@ export type FooterCell = {
   clock: boolean;
   /** False for the Credits item, which shows a value without a meter. */
   meter: boolean;
+  /** Text colour token: the host foreground (as in Paseo's CPU box), status colour only near or at the limit. */
+  textTone: "text" | "warning" | "danger";
 };
 const blockedHealth = ["needsLogin", "quarantined", "deviceBlocked"];
 export function footerCell(
@@ -71,21 +73,23 @@ export function footerCell(
     window.resetsAt !== null &&
     window.resetsAt <= now;
   if (account && blockedHealth.includes(account.health))
-    return { kind: "blocked", label, percent: "—", tone: "danger", fill: 0, clock: false, meter: true };
+    return { kind: "blocked", label, percent: "—", tone: "danger", fill: 0, clock: false, meter: true, textTone: "danger" };
   if (!window || value === null || passed)
-    return { kind: "unknown", label, percent: "—", tone: "unknown", fill: 0, clock: false, meter: true };
+    return { kind: "unknown", label, percent: "—", tone: "unknown", fill: 0, clock: false, meter: true, textTone: "text" };
   if (value >= 100 && !window.inferred)
-    return { kind: "blocked", label, percent: "100%", tone: "danger", fill: 100, clock: false, meter: true };
+    return { kind: "blocked", label, percent: "100%", tone: "danger", fill: 100, clock: false, meter: true, textTone: "danger" };
   const old = stale(window, opts.offline, now);
   const text = percentText(value, old, window.inferred);
+  const level = severity(value, false, opts.warning, opts.danger);
   return {
     kind: old ? "stale" : "value",
     label,
     percent: old ? `~${text}` : text,
-    tone: severity(value, false, opts.warning, opts.danger) as FooterCell["tone"],
+    tone: level as FooterCell["tone"],
     fill: Math.max(0, Math.min(100, value)),
     clock: old,
     meter: true,
+    textTone: old ? "text" : level === "danger" ? "danger" : level === "warning" ? "warning" : "text",
   };
 }
 export function footerSummary(input: {
@@ -105,7 +109,7 @@ function paidCell(provider: Provider, account: Account | null, narrow: boolean, 
   const label = (paidLabels[provider] ?? ["Paid", "Paid"])[narrow ? 1 : 0];
   const value = paidFooterValue(provider, account?.paidUsage);
   if (value === null || !account?.paidUsage)
-    return { kind: "unknown", label, percent: "—", tone: "unknown", fill: 0, clock: false, meter: false };
+    return { kind: "unknown", label, percent: "—", tone: "unknown", fill: 0, clock: false, meter: false, textTone: "text" };
   const old = paidStale(account.paidUsage, now);
   return {
     kind: old ? "stale" : "value",
@@ -115,5 +119,6 @@ function paidCell(provider: Provider, account: Account | null, narrow: boolean, 
     fill: 0,
     clock: old,
     meter: false,
+    textTone: "text",
   };
 }

@@ -40,6 +40,14 @@ export function severity(
         ? "warning"
         : "normal";
 }
+/**
+ * A saved or default agy "gemini:<duration>" footer item with no window of its own shows the account's
+ * Gemini model-quota window (label "Gemini", no duration); a real window with that ID always wins.
+ */
+function geminiFallback(provider: Provider, windowId: string, account: Account | null): Window | null {
+  if (provider !== "agy" || !account || !/^gemini:(?!unknown$)/.test(windowId)) return null;
+  return account.windows.find((w) => w.id === "gemini:unknown" || (w.quotaSource === "models" && w.window === "unknown")) ?? null;
+}
 export function chooseItems(
   status: Status | null,
   items: DisplaySettings["items"],
@@ -57,7 +65,9 @@ export function chooseItems(
     return {
       ...item,
       account,
-      window: account?.windows.find((w) => w.id === item.windowId) ?? null,
+      window:
+        account?.windows.find((w) => w.id === item.windowId) ??
+        geminiFallback(item.provider, item.windowId, account),
     };
   });
 }

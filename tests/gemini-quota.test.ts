@@ -88,10 +88,27 @@ test("footer: label 'Gemini', no duration, spoken label, saved selections keep w
   assert.equal(footerSpeech("agy", cell), "agy Gemini model quota, 35 percent used");
   const none = footerCell({ provider: "agy", windowId: "gemini:unknown", account: withModel(), window: windowSchema.parse(modelQuota({ usedPercent: null })) }, { warning: 80, danger: 100, offline: false, narrow: false, now: 1000 });
   assert.deepEqual([none.percent, none.kind], ["—", "unknown"]);
-  // an old saved selection of the 5h Gemini window on a model-quota-only account stays an unknown cell, no crash
-  const saved = chooseItems(statusSchema.parse({ cacheOnly: true, generatedAt: 1, providers: [{ provider: "agy", cacheStatus: "available", accounts: [withModel()] }] }), [{ provider: "agy", windowId: "gemini:5h" }]);
-  const old = footerCell(saved[0]!, { warning: 80, danger: 100, offline: false, narrow: false, now: 1000 });
-  assert.deepEqual([old.kind, old.percent, old.label], ["unknown", "—", "Gemini 5h"]);
+  const cellFor = (account: Account, windowId: string) => {
+    const status = statusSchema.parse({ cacheOnly: true, generatedAt: 1, providers: [{ provider: "agy", cacheStatus: "available", accounts: [account] }] });
+    const item = chooseItems(status, [{ provider: "agy", windowId }])[0]!;
+    return footerCell(item, { warning: 80, danger: 100, offline: false, narrow: false, now: 1000 });
+  };
+  // a saved (or default) agy Gemini duration selection falls back to the model-quota window when it has no window of its own
+  const fallback = cellFor(withModel(), "gemini:5h");
+  assert.deepEqual([fallback.kind, fallback.percent, fallback.label], ["value", "35%", "Gemini"]);
+  assert.equal(footerSpeech("agy", fallback), "agy Gemini model quota, 35 percent used");
+  assert.equal(cellFor(withModel(), "gemini:weekly").percent, "35%");
+  // a real Gemini window with that duration still wins
+  const real = cellFor(acct([w("claude-gpt:5h"), modelQuota(), w("gemini:5h", { usedPercent: 12, resetsAt: 9999 })]), "gemini:5h");
+  assert.deepEqual([real.percent, real.label], ["12%", "Gemini 5h"]);
+  // other selections are untouched: no model-quota stand-in for Claude/GPT, other providers or the model-quota id itself
+  assert.equal(cellFor(withModel(), "claude-gpt:weekly").kind, "unknown");
+  assert.equal(cellFor(oldPayload(), "gemini:5h").kind, "unknown", "no model-quota window: still an unknown cell");
+  assert.equal(cellFor(withModel(), "gemini:unknown").percent, "35%");
+  const claudeStatus = statusSchema.parse({ cacheOnly: true, generatedAt: 1, providers: [{ provider: "claude", cacheStatus: "available", accounts: [withModel()] }] });
+  assert.equal(chooseItems(claudeStatus, [{ provider: "claude", windowId: "gemini:5h" }])[0]!.window, null);
+  // the fallback window has no pace tick or duration
+  assert.equal(windowPresentation("agy", chooseItems(statusSchema.parse({ cacheOnly: true, generatedAt: 1, providers: [{ provider: "agy", cacheStatus: "available", accounts: [withModel()] }] }), [{ provider: "agy", windowId: "gemini:5h" }])[0]!.window!, 80, 100, false, 1000).tick, null);
 });
 
 test("window type exports", () => {

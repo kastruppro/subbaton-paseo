@@ -13,3 +13,18 @@ export function PageSection({ id, muted, children }: { id: SectionId; muted: str
     </SettingsSection>
   );
 }
+
+/**
+ * Level-2 heading of the settings page: every sub-group inside a PageSection (level 1) uses this one
+ * style, with a header role, so the hierarchy is the same everywhere.
+ */
+export function SubSection({ title, color, children }: { title: string; color: string; children: ReactNode }) {
+  return (
+    <View style={{ gap: 6 }}>
+      <Text accessibilityRole="header" aria-level={2} style={{ color, fontSize: 14, fontWeight: "600" }}>
+        {title}
+      </Text>
+      {children}
+    </View>
+  );
+}

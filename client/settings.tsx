@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Text, View } from "react-native";
 import { useSettings, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import {
-  SettingsSection,
   SettingsCard,
   SettingsInput,
   SettingsAction,
@@ -16,7 +15,7 @@ import {
 import { providerLabel, windowTitle } from "./display.js";
 import { maxFooterItems } from "../shared/contracts.js";
 import { useStatus } from "./use-status.js";
-import { PageSection } from "./page-section.js";
+import { PageSection, SubSection } from "./page-section.js";
 import { displayNote } from "./settings-sections.js";
 function BinaryForm({
   initial,
@@ -130,7 +129,7 @@ export function DisplaySection(props: PluginSurfaceProps) {
       <Text style={{ color: c.foregroundMuted }}>
         Preferences apply to this host on every connected device. All footer items follow the active account. Usage stays inside SubBaton.
       </Text>
-      <SettingsSection title="Always visible items">
+      <SubSection title="Always visible items" color={c.foreground}>
         {display.status === "ready" ? (
           <SettingsCard>
             {unique.map((item) => {
@@ -177,8 +176,8 @@ export function DisplaySection(props: PluginSurfaceProps) {
           reading. Missing or stale values show unknown or ~, never a fresh
           zero.
         </Text>
-      </SettingsSection>
-      <SettingsSection title="Threshold colours">
+      </SubSection>
+      <SubSection title="Threshold colours" color={c.foreground}>
         {display.status === "ready" && (
           <ThresholdForm
             key={String(display.revision)}
@@ -192,7 +191,7 @@ export function DisplaySection(props: PluginSurfaceProps) {
             }
           />
         )}
-      </SettingsSection>
+      </SubSection>
       {display.saveError && (
         <Text style={{ color: c.statusWarning }}>
           Save failed or conflicted. Reload before editing again.

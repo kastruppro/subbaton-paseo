@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
 import { useRpc, useSettings, type PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { Modal, SettingsAction, SettingsCard, SettingsInput, SettingsRow, SettingsSection, SettingsSwitch } from "@getpaseo/plugin/client/ui";
+import { Modal, SettingsAction, SettingsCard, SettingsInput, SettingsRow, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { handoffControlRpc, handoffProviders, handoffSettings, type HandoffProvider } from "../shared/handoff.js";
 import type { ActionResult } from "../shared/contracts.js";
 import { handoffActions, handoffLine, handoffTone } from "./handoff-model.js";
+import { SubSection } from "./page-section.js";
 import { useHandoff } from "./use-handoff.js";
 import { providerLabel, relativeAge } from "./display.js";
 
@@ -31,7 +32,7 @@ export function HandoffSection({ hostId, colors }: { hostId: string; colors: Col
   };
   const data = status.data;
   return (
-    <SettingsSection title="Coordinated handoff">
+    <SubSection title="Coordinated handoff" color={colors.foreground}>
       <SettingsCard>
         {data?.notice && (
           <SettingsAction
@@ -156,6 +157,6 @@ export function HandoffSection({ hostId, colors }: { hostId: string; colors: Col
           </View>
         </Modal.Content>
       </Modal>
-    </SettingsSection>
+    </SubSection>
   );
 }

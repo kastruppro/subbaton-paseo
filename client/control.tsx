@@ -8,7 +8,6 @@ import {
   SettingsCard,
   SettingsInput,
   SettingsRow,
-  SettingsSection,
   SettingsSelect,
   SettingsSwitch,
 } from "@getpaseo/plugin/client/ui";
@@ -57,7 +56,7 @@ import {
 import { keyboardFocus, providerLabel, relativeAge, timestamp } from "./display.js";
 import { HandoffSection } from "./handoff-section.js";
 import { DisplaySection, CliSection } from "./settings.js";
-import { PageSection } from "./page-section.js";
+import { PageSection, SubSection } from "./page-section.js";
 import { hostWideLabel, pendingBarPlaces, pendingBarText, providerFieldsBySection, providerSelectorNote, settingsSections, type SectionId } from "./settings-sections.js";
 import { handoffRequestRpc, handoffSettings } from "../shared/handoff.js";
 import { handoffEffect } from "./handoff-model.js";
@@ -480,7 +479,7 @@ function PlanViewer({ provider, colors }: { provider: Provider; colors: Colors }
   const data = plan.data?.ok ? plan.data.data : null;
   const summary = data ? planSummary(data) : null;
   return (
-    <SettingsSection title="Automatic plan (read only)">
+    <SubSection title="Automatic plan (read only)" color={colors.foreground}>
       <SettingsCard>
         <SettingsRow label="Why-log" hint="The CLI's current cache-only plan. It never switches anything.">
           <View style={{ flexDirection: "row", gap: 6 }}>
@@ -578,7 +577,7 @@ function PlanViewer({ provider, colors }: { provider: Provider; colors: Colors }
           </View>
         )}
       </SettingsCard>
-    </SettingsSection>
+    </SubSection>
   );
 }
 
@@ -794,14 +793,13 @@ export function ControlScreen(props: PluginSurfaceProps) {
   let fieldsBySection = providerFieldsBySection([]);
   const renderFields = (id: SectionId) =>
     fieldsBySection[id].map((group) => (
-      <View key={group.title} style={{ gap: 6 }}>
-        <Text accessibilityRole="header" style={{ color: colors.foreground, fontWeight: "600" }}>{group.title}</Text>
+      <SubSection key={group.title} title={group.title} color={colors.foreground}>
         <SettingsCard>
           {group.fields.map((view) => (
             <FieldControl key={view.key} view={view} error={view.field.path === "trustedExecutableOwners" && notices[selected]?.code === "invalidTrustedExecutableOwners" ? notices[selected]?.message : null} disabled={!editable} colors={colors} update={update} revisionKey={revisionKey} />
           ))}
         </SettingsCard>
-      </View>
+      </SubSection>
     ));
   if (settings.isLoading) status = <Text style={{ color: colors.foregroundMuted }}>Loading settings…</Text>;
   else if (settings.isError) status = <Text style={{ color: colors.statusWarning }}>The host did not answer. Check the Paseo connection and reload.</Text>;
@@ -1006,7 +1004,7 @@ export function ControlScreen(props: PluginSurfaceProps) {
       </Text>
       <DisplaySection {...props} />
       <View style={{ gap: 12 }}>
-        <Text accessibilityRole="header" style={{ color: colors.foreground, fontWeight: "600" }}>Provider</Text>
+        <Text accessibilityRole="header" aria-level={2} style={{ color: colors.foreground, fontSize: 14, fontWeight: "600" }}>Provider</Text>
         <Text style={{ color: muted, fontSize: 12 }}>{providerSelectorNote()}</Text>
         {tabs}
         <Notice result={notices[selected] ?? null} colors={colors} />

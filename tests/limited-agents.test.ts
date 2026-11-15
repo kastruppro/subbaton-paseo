@@ -35,13 +35,14 @@ const memoryStore = (): RecoveryStore & { saved: unknown } => {
   const s = { saved: null as unknown, load: async () => s.saved, save: async (v: unknown) => void (s.saved = JSON.parse(JSON.stringify(v))) };
   return s;
 };
-function make(opts: { store?: RecoveryStore; resume?: { v: boolean }; account?: { v: string | null }; clock?: { t: number } } = {}) {
+type Usage = { v: unknown };
+function make(opts: { store?: RecoveryStore; resume?: { v: boolean }; account?: { v: string | null }; clock?: { t: number }; usage?: Usage } = {}) {
   const store = opts.store ?? memoryStore();
   const resume = opts.resume ?? { v: true };
   const account = opts.account ?? { v: "acct-A" };
   const clock = opts.clock ?? { t: 1000 };
   const logs: string[] = [];
-  const recovery = new LimitedAgentRecovery(store, async () => resume.v, async () => account.v, () => clock.t, 30_000, (line) => void logs.push(line));
+  const recovery = new LimitedAgentRecovery(store, async () => resume.v, async () => account.v, () => clock.t, 30_000, (line) => void logs.push(line), opts.usage ? async () => opts.usage!.v as never : undefined);
   return { recovery, store, resume, account, clock, logs };
 }
 /** A limited turn ends for `id`, then the switch is adopted. */
@@ -748,4 +749,50 @@ test("LL-2: realistic UUID agent ids appear in the log only as the 8-character s
   }
   assert.ok(r.logs.some((l) => l.includes("agent=00000001")), "the short form is used");
   assertSafe(r);
+});
+
+// Switch target usability (the core's eligibility rule: all windows fresh and one at 100 = exhausted; paid fallback must be fresh and funded).
+const win = (usedPercent: number | null, patch: Record<string, unknown> = {}) => ({ id: "five_hour", label: "5h", usedPercent, resetsAt: 5000, stale: false, inferred: false, fetchedAt: 990, ...patch });
+const credits = (patch: Record<string, unknown> = {}) => ({ kind: "credits", fetchedAt: 990, stale: false, hasCredits: true, balance: "12.5", ...patch });
+const target = (windows: unknown[], paidUsage?: unknown) => ({ id: "acct-A", windows, paidUsage });
+async function exhaustedRun(usage: Usage) {
+  const r = make({ usage }), port = new Fake();
+  port.add("a");
+  await limit(r, "a");
+  await adopt(r, "txn:1");
+  await r.recovery.run(port);
+  await r.recovery.run(port);
+  return { r, port };
+}
+test("target exhausted with no usable paid fallback: the candidate waits for the next switch, logged once", async () => {
+  for (const paid of [undefined, credits({ hasCredits: false }), credits({ balance: "0" }), credits({ stale: true }), credits({ fetchedAt: 700 })]) {
+    const usage = { v: target([win(100)], paid) };
+    const { r, port } = await exhaustedRun(usage);
+    assert.deepEqual(port.calls, [], JSON.stringify(paid));
+    assert.equal(r.logs.filter((l) => /waiting for the next switch agent=a reason=target exhausted/.test(l)).length, 1);
+    // the next switch to a usable account continues it once
+    usage.v = target([win(10)]);
+    await adopt(r, "txn:2");
+    await r.recovery.run(port);
+    assert.equal(port.sends().length, 1);
+  }
+});
+test("target exhausted but with usable credits (unlimited or a positive balance): continues as normal", async () => {
+  for (const paid of [credits(), credits({ hasCredits: undefined, unlimited: true, balance: undefined })]) {
+    const { port } = await exhaustedRun({ v: target([win(100)], paid) });
+    assert.deepEqual(port.sends(), [`send:a:${continuationText}`]);
+  }
+});
+test("target status unreadable, stale or unknown: continues as today and logs the uncertainty once", async () => {
+  for (const v of [null, target([]), target([win(100, { stale: true })]), target([win(null)]), target([win(100), win(30, { stale: true })])]) {
+    const { r, port } = await exhaustedRun({ v });
+    assert.equal(port.sends().length, 1, JSON.stringify(v));
+    assert.equal(r.logs.filter((l) => /target usage unreadable, stale or unknown/.test(l)).length, 1);
+    assertSafe(r);
+  }
+});
+test("target with headroom continues without any uncertainty line", async () => {
+  const { r, port } = await exhaustedRun({ v: target([win(40), win(99)]) });
+  assert.equal(port.sends().length, 1);
+  assert.ok(!has(r, /unreadable|exhausted/));
 });

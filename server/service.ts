@@ -36,6 +36,7 @@ import {
   type ActionResult,
   type Provider,
   type StatusResult,
+  type Account,
 } from "../shared/contracts.js";
 export interface CliExecutor {
   run(
@@ -435,6 +436,11 @@ export class SubBatonService {
     this.invalidate();
     const status = await this.status();
     return status.data?.providers.find((p) => p.provider === provider)?.accounts.find((a) => a.active)?.id ?? null;
+  }
+  /** One saved account from the (cached, cache-only) status; null when the status is unreadable or the account unknown. */
+  async accountUsage(provider: Provider, id: string): Promise<Account | null> {
+    const status = await this.status();
+    return status.data?.providers.find((p) => p.provider === provider)?.accounts.find((a) => a.id === id) ?? null;
   }
   async refresh(): Promise<
     { provider: Provider | null; result: ActionResult }[]

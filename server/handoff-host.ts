@@ -44,6 +44,10 @@ export function registerHandoff(
     recoveryStore,
     async () => (await read()).resumeLimitedCodexAgents,
     () => service.activeAccount("codex"),
+    undefined,
+    undefined,
+    undefined,
+    (id) => service.accountUsage("codex", id),
   );
   coordinator.onCodexAdopted = (key, account, switchedAt) =>
     void recovery

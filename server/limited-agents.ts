@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AgentPort, AgentSnapshot } from "./handoff.js";
+import type { Account, PaidUsage } from "../shared/contracts.js";
 
 // Limited Codex agent continuation (0.9.0). After a verified Codex account switch (the plugin's own
 // reload of an agent makes it adopt the new login; no daemon restart is needed), each Codex agent whose latest turn positively ended
@@ -30,6 +31,31 @@ export const isLimitFailure = (outcome: TurnOutcome): boolean => limitMatch(outc
 export const logPrefix = "[subbaton] limited-agents:";
 const short = (id: string) => id.slice(0, 8);
 const shortKey = (key: string) => (key.length > 40 ? key.slice(0, 40) + "…" : key);
+
+/** Paid fallback usable now. Mirrors the core's PaidUsage.eligible (Sources/SubBatonCore/PaidUsage.swift). */
+export function paidEligible(paid: PaidUsage | undefined, now: number): boolean {
+  if (!paid || paid.stale || !Number.isFinite(paid.fetchedAt) || now < paid.fetchedAt || now - paid.fetchedAt >= 180) return false;
+  if (paid.kind === "credits") {
+    const amount = paid.balance !== undefined && /^[0-9]+(?:\.[0-9]+)?$/.test(paid.balance) ? Number(paid.balance) : undefined;
+    if (paid.hasCredits === false || (amount !== undefined && amount <= 0)) return false;
+    return paid.unlimited === true || (paid.hasCredits === true && amount !== undefined && amount > 0);
+  }
+  if (paid.enabled !== true) return false;
+  if (paid.utilization !== undefined && paid.utilization >= 100) return false;
+  if (paid.monthlyLimit !== undefined && paid.monthlyLimit <= 0) return false;
+  if (paid.monthlyLimit !== undefined && paid.usedCredits !== undefined && paid.usedCredits >= paid.monthlyLimit) return false;
+  return true;
+}
+/**
+ * Core rule (PolicyEngine): exhausted = every window fresh and one at 100 or more. "unknown" when there are no
+ * windows or none at 100 while some reading is stale or missing.
+ */
+export function targetUsage(account: Account, now: number): "exhausted" | "usable" | "unknown" {
+  const fresh = (w: Account["windows"][number]) => !w.stale && w.usedPercent !== null && !(w.resetsAt !== null && w.resetsAt <= now);
+  if (account.windows.length === 0) return "unknown";
+  if (account.windows.every(fresh) && account.windows.some((w) => (w.usedPercent ?? 0) >= 100)) return paidEligible(account.paidUsage, now) ? "usable" : "exhausted";
+  return account.windows.every(fresh) ? "usable" : "unknown";
+}
 
 export interface HookAgent {
   id: string;
@@ -90,6 +116,8 @@ export class LimitedAgentRecovery {
     private timeoutMs = 30_000,
     /** One line per decision; the plugin's stdout shows in `paseo plugin logs subbaton`. */
     private log: (line: string) => void = (line) => console.log(line),
+    /** The saved account with its windows and paid usage (the CLI's status --json); null when unreadable. Omitted: no check. */
+    private accountUsage?: (accountId: string) => Promise<Account | null>,
   ) {}
 
   private say(message: string) {
@@ -284,6 +312,26 @@ export class LimitedAgentRecovery {
     }
     const id = `${pending.key}|${agentId}|${candidate.turnId}`;
     if (this.state.consumed.includes(id)) return drop("already consumed for this switch");
+    if (this.accountUsage) {
+      const account = await withTimeout(this.accountUsage(pending.accountId), this.timeoutMs).catch(() => null);
+      const verdict = account ? targetUsage(account, this.now()) : "unknown";
+      if (verdict === "exhausted") {
+        // The target would hit the limit again and suppress the agent: keep it for the next switch.
+        const waitId = `exhausted|${id}`;
+        if (!this.waitLogged.has(waitId)) {
+          this.waitLogged.add(waitId);
+          this.say(`waiting for the next switch agent=${who} reason=target exhausted`);
+        }
+        return;
+      }
+      if (verdict === "unknown") {
+        const unknownId = `unknown|${pending.key}`;
+        if (!this.waitLogged.has(unknownId)) {
+          this.waitLogged.add(unknownId);
+          this.say(`target usage unreadable, stale or unknown, continuing anyway account=${pending.accountId} key=${shortKey(pending.key)}`);
+        }
+      }
+    }
     const first = await this.eligible(port, pending, agentId, candidate, false);
     if (first.state === "wait") {
       // Runs fire on every finished turn host-wide; log the wait once, again only after it resolved.

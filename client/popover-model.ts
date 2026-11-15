@@ -136,13 +136,15 @@ const active = (activePhases as readonly string[]);
 export function handoffRow(h: Handoff | null | undefined): RowLine | null {
   if (!h) return null;
   const alias = h.targetAlias ?? "saved account";
+  // A renewal-only handoff (no known target yet) renews candidates; one with a target is a plain switch.
+  const renewing = h.provider === "agy" && h.trigger === "automaticSwitch" && h.target === null;
   if (h.phase === "waiting")
     return {
       kind: "warning", tone: "warning",
-      text: `Switching to ${alias} when idle · ${h.waitingFor} agent${h.waitingFor === 1 ? "" : "s"} working`,
+      text: `${renewing ? "Renewing agy accounts" : `Switching to ${alias}`} when idle · ${h.waitingFor} agent${h.waitingFor === 1 ? "" : "s"} working`,
       action: "cancel",
     };
-  if (h.phase === "switching" && h.provider === "agy" && h.trigger === "automaticSwitch")
+  if (h.phase === "switching" && renewing)
     return { kind: "warning", tone: "warning", text: "Renewing agy accounts and switching…" };
   if (active.includes(h.phase))
     return {

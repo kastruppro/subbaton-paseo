@@ -104,17 +104,17 @@ test("agy switch: processesNotAllowed waits, stopRefused closed nothing, stopFai
 test("agy auto plan and run-once: fixed argv and every outcome mapped", async () => {
   const { cli, service } = await withStatus("agy");
   cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, targetIfProcessesStopped: target, executionEnabled: true }));
-  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: true, target });
+  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: true, target, renewalOnly: false });
   assert.deepEqual(cli.calls.at(-1)?.argv, ["agy", "auto", "plan", "--json"]);
   cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, targetIfProcessesStopped: target, executionEnabled: false }));
-  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null });
+  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null, renewalOnly: false });
   // N-M2: renewal needs the sessions stopped, even though no target is known yet
   cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, stopReason: "renewCandidates", targetIfProcessesStopped: null, executionEnabled: true }));
-  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: true, target: null });
+  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: true, target: null, renewalOnly: true });
   cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, stopReason: "renewCandidates", targetIfProcessesStopped: null, executionEnabled: false }));
-  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null }, "same owner settings as today");
+  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null, renewalOnly: false }, "same owner settings as today");
   cli.on(["agy", "auto", "plan"], ok({ blockedOnlyByProcesses: true, targetIfProcessesStopped: null, executionEnabled: true }));
-  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null }, "no target and no renewal reason: nothing to do");
+  assert.deepEqual(await service.agyAutoPlan(), { ok: true, blockedOnlyByProcesses: false, target: null, renewalOnly: false }, "no target and no renewal reason: nothing to do");
   cli.on(["agy", "auto", "plan"], ok({ outcome: "x" }));
   assert.deepEqual(await service.agyAutoPlan(), { ok: false });
 

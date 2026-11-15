@@ -66,7 +66,7 @@ export interface HandoffCli {
   events(since: number | null): Promise<{ ok: true; events: { id?: string; transaction?: string; target?: string; at: number; provider: string; kind: string }[] } | { ok: false }>;
   knownAccount(provider: HandoffProvider, target: string): { alias: string } | null;
   /** agy auto plan: whether running agy processes are the only blocker of an automatic switch. */
-  agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false }>;
+  agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null; renewalOnly?: boolean } | { ok: false }>;
   /** agy auto run-once --stop-agy --only-pids. */
   agyAutoRunOnce(onlyPids: number[]): Promise<SwitchOutcome>;
   /** codex processes daemonRestartPending; null when unknown. */
@@ -135,6 +135,8 @@ const interactiveExecutables = new Set(
 const interactive = (name: string) => interactiveExecutables.has(name.replace(/^-/, "").toLowerCase());
 /** Not running a turn and safe to reload: idle, and for Codex also an agent that stopped in an error (for example a usage limit). */
 const reloadable = (provider: HandoffProvider, a: AgentSnapshot) => a.status === "idle" || (provider === "codex" && a.status === "error" && !a.activeTurn);
+/** After agy sessions were stopped for renewal without a switch, no further renewal-only stop for this long. */
+export const AGY_RENEW_HOLD_SECONDS = 30 * 60;
 const MANUAL_RESUME_NOTE = " A stopped session had no saved conversation ID (no saved conversation), so that agent may start without its thread.";
 /** A Codex handoff that already switched and only waits to reload running agents one by one may be taken over by a newer switch. */
 const supersedable = (h: Handoff | null) => !!h && h.provider === "codex" && h.phase === "reopening";
@@ -152,6 +154,8 @@ export class HandoffCoordinator {
   private lastEventPoll = -Infinity;
   private lastAgyPlan = -Infinity;
   private agyRetryAt = -Infinity;
+  /** No renewal-only agy run before this time (Unix seconds); set after a stoppedNoSwitch. */
+  private agyRenewHoldUntil = -Infinity;
   private lastDaemonAttempt = -Infinity;
   private queuedTick: Promise<void> | null = null;
   private tickPort: AgentPort | null = null;
@@ -499,6 +503,8 @@ export class HandoffCoordinator {
     const plan = await this.cli.agyAutoPlan();
     // A renewal-only trigger has no known target yet (the final plan decides after the renewal).
     if (!plan.ok || !plan.blockedOnlyByProcesses) return;
+    // After a stoppedNoSwitch, renewal-only runs wait (like agyRetryAt, in memory); a plan with a real target may still switch.
+    if (plan.renewalOnly && this.now() < this.agyRenewHoldUntil) return;
     const now = this.now();
     this.state.handoffs.agy = {
       id: this.newId(),
@@ -669,7 +675,7 @@ export class HandoffCoordinator {
       }
     } else if (h.restartDaemon) options.restartDaemon = true;
     // Persist the affected set before the CLI runs so a crash can be reported precisely.
-    this.update(h, { phase: "switching", affected, waitingFor: 0, code: "switching", message: h.provider === "agy" && h.trigger === "automaticSwitch" ? `Closing ${affected.length} idle agy ${affected.length === 1 ? "agent" : "agents"}, renewing candidate accounts (up to 10 minutes) and switching.` : h.provider === "agy" && affected.length ? `Closing ${affected.length} idle agy ${affected.length === 1 ? "agent" : "agents"} and switching.` : "Switching." });
+    this.update(h, { phase: "switching", affected, waitingFor: 0, code: "switching", message: h.provider === "agy" && h.trigger === "automaticSwitch" && h.target === null ? `Closing ${affected.length} idle agy ${affected.length === 1 ? "agent" : "agents"}, renewing candidate accounts (up to 10 minutes) and switching.` : h.provider === "agy" && affected.length ? `Closing ${affected.length} idle agy ${affected.length === 1 ? "agent" : "agents"} and switching.` : "Switching." });
     await this.persist();
     // Review L1: re-check right before the CLI runs; anything busy or a changed idle set goes back to waiting.
     const again = (await agents.list()).filter((a) => a.provider === paseoProviderId[h.provider]);
@@ -718,6 +724,7 @@ export class HandoffCoordinator {
         // agy renewal before a switch stopped the sessions, then the final policy chose not to switch: nothing was
         // switched, but the stopped sessions are resumed exactly as after a switch (agent.reload() reopens them).
         this.noSwitch.set(h.id, out.manualResumeRequired === true);
+        this.agyRenewHoldUntil = this.now() + AGY_RENEW_HOLD_SECONDS;
         this.update(h, {
           phase: affected.length > 0 ? "reopening" : "done",
           deadline: this.now() + (await this.settings()).idleWaitMinutes * 60,

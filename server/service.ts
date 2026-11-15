@@ -876,7 +876,7 @@ export class SubBatonService {
   }
   /** The coordinator's view of this service. */
   /** agy auto plan, read-only: is running agy the only thing blocking an automatic switch? */
-  async agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false }> {
+  async agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null; renewalOnly: boolean } | { ok: false }> {
     const response = await this.call(["agy", "auto", "plan"], 15000, false, { kind: "read" });
     if (response.error) return { ok: false };
     const plan = response.result as { blockedOnlyByProcesses?: unknown; targetIfProcessesStopped?: unknown; executionEnabled?: unknown; stopReason?: unknown };
@@ -885,7 +885,7 @@ export class SubBatonService {
     // A paused or disabled provider never executes, so it is never "blocked only by processes" for us.
     // 0.9.6: renewal of stale candidates also needs the sessions stopped; the target is decided after it.
     const blocked = plan.blockedOnlyByProcesses && plan.executionEnabled === true && (target !== null || plan.stopReason === "renewCandidates");
-    return { ok: true, blockedOnlyByProcesses: blocked, target: blocked ? target : null };
+    return { ok: true, blockedOnlyByProcesses: blocked, target: blocked ? target : null, renewalOnly: blocked && target === null && plan.stopReason === "renewCandidates" };
   }
   /** agy auto run-once --stop-agy --only-pids: the automatic switch, stopping only Paseo's sessions. */
   async agyAutoRunOnce(pids: number[]): Promise<SwitchOutcome> {

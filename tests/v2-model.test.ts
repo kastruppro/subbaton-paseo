@@ -194,6 +194,8 @@ test("handoff rows: pending with Cancel, uncertain with Details", () => {
   assert.equal(w.action, "cancel"); assert.equal(w.tone, "warning");
   // an automatic agy handoff that is renewing candidates shows what it is doing, not a switch to an unknown account
   assert.equal(handoffRow(handoff({ provider: "agy", trigger: "automaticSwitch", phase: "switching", target: null, targetAlias: null }))!.text, "Renewing agy accounts and switching…");
+  assert.equal(handoffRow(handoff({ provider: "agy", trigger: "automaticSwitch", phase: "waiting", target: null, targetAlias: null, waitingFor: 2 }))!.text, "Renewing agy accounts when idle · 2 agents working");
+  assert.equal(handoffRow(handoff({ provider: "agy", trigger: "automaticSwitch", phase: "switching", target: "22222222-2222-4222-8222-222222222222", targetAlias: "Solo" }))!.text, "Switching (Solo)", "a known target keeps the switch wording");
   assert.equal(handoffRow(handoff({ waitingFor: 1 }))!.text, "Switching to Solo when idle · 1 agent working");
   const u = handoffRow(handoff({ provider: "agy", targetAlias: "Backup", phase: "uncertain" }))!;
   assert.equal(u.text, "Switch to Backup uncertain – check the agy login");

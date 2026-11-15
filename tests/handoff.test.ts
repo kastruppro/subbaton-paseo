@@ -44,7 +44,7 @@ class FakeCli implements HandoffCli {
   events_: { id?: string; transaction?: string; target?: string; at: number; provider: string; kind: string }[] = [];
   eventReads: (number | null)[] = [];
   gate: Promise<void> | null = null;
-  plan: { ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false } = { ok: true, blockedOnlyByProcesses: false, target: null };
+  plan: { ok: true; blockedOnlyByProcesses: boolean; target: string | null; renewalOnly?: boolean } | { ok: false } = { ok: true, blockedOnlyByProcesses: false, target: null };
   planReads = 0;
   autoRuns: number[][] = [];
   autoOutcome: SwitchOutcome = { kind: "switched", code: "switched", message: "Automatic switch verified." };
@@ -171,6 +171,30 @@ test("N-M2: an automatic agy handoff starts for renewal alone (no known target) 
   assert.equal(h.phase, "done");
   assert.match(h.message, /no switch/i);
   assert.match(h.message, /no saved conversation/i, "N-L1: the owner sees why a thread may start fresh");
+});
+test("N2-M1: after a stoppedNoSwitch, renewal-only runs are held for 30 minutes; a plan with a real target is not", async () => {
+  const { cli, agents, coordinator, advance } = setup();
+  agents.agents = [agent("a1", "antigravity")];
+  cli.processes = [proc(11)];
+  cli.plan = { ok: true, blockedOnlyByProcesses: true, target: null, renewalOnly: true };
+  cli.autoOutcome = { kind: "stoppedNoSwitch", code: "stoppedNoSwitch", message: "ok" };
+  advance(61);
+  await coordinator.tick(agents);
+  assert.equal(cli.autoRuns.length, 1);
+  advance(61);
+  await coordinator.tick(agents);
+  assert.equal(cli.autoRuns.length, 1, "a second renewal-only plan within 30 minutes stops nothing");
+  cli.plan = { ok: true, blockedOnlyByProcesses: true, target, renewalOnly: false };
+  advance(61);
+  await coordinator.tick(agents);
+  assert.equal(cli.autoRuns.length, 2, "a real target may still switch during the hold");
+  cli.plan = { ok: true, blockedOnlyByProcesses: true, target: null, renewalOnly: true };
+  advance(61);
+  await coordinator.tick(agents);
+  assert.equal(cli.autoRuns.length, 2, "still inside the hold");
+  advance(1800);
+  await coordinator.tick(agents);
+  assert.equal(cli.autoRuns.length, 3, "after 30 minutes renewal may run again");
 });
 test("agy: only processes descended from the Paseo daemon count; anything else waits (fail closed)", async () => {
   const cases: [AgentSnapshot[], AgyProcessInfo[] | null, string][] = [

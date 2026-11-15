@@ -14,3 +14,9 @@ The plugin classifies it as `stoppedNoSwitch` (neither a failure nor a switch). 
 ## Timeout
 
 `agy auto run-once --stop-agy` runs with `agyRunOnceTimeoutMs` (600 000 ms) because the core may spend up to 360 s on sequential isolated renewals, plus cleanup and the final read. A timeout is classified `uncertain` (the agents stay as they are until the owner checks), never as "nothing was stopped". The manual `agy switch --stop-agy` does not renew and keeps 120 s. While the run lasts the handoff stays in the `switching` phase: it has no deadline of its own, owner actions answer "busy" after two seconds instead of waiting, and the popover shows "Renewing agy accounts and switching…" for an automatic agy handoff.
+
+## Hold after a renewal-only stop
+
+After a `stoppedNoSwitch`, renewal-only runs (`agy auto plan` with `stopReason: "renewCandidates"` and no target) are held for 30 minutes (`AGY_RENEW_HOLD_SECONDS`), in memory like `agyRetryAt`. A plan with a real target and `blockedOnlyByProcesses` can still switch during the hold. The popover says "Renewing agy accounts when idle" / "Renewing agy accounts and switching…" only for a handoff without a target; one with a known target keeps the switch wording.
+
+Accepted: the 10-minute run holds the coordinator's serial chain (Codex per-agent reopens and event polling wait; owner actions answer "busy" after two seconds), and the service's `mutating` flag makes other SubBaton actions answer "busy" meanwhile.

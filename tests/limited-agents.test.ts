@@ -5,6 +5,7 @@ import {
   continuationText,
   isLimitFailure,
   paidEligible,
+  targetUsage,
   type RecoveryStore,
 } from "../server/limited-agents.js";
 import type { AgentPort, AgentSnapshot } from "../server/handoff.js";
@@ -753,8 +754,8 @@ test("LL-2: realistic UUID agent ids appear in the log only as the 8-character s
 });
 
 // Switch target usability (the core's eligibility rule: all windows fresh and one at 100 = exhausted; paid fallback must be fresh and funded).
-const win = (usedPercent: number | null, patch: Record<string, unknown> = {}, id = "five_hour") => ({ id, label: id, usedPercent, resetsAt: 5000, stale: false, inferred: false, fetchedAt: 990, ...patch });
-const pair = (five: number | null, seven: number | null = 10, patch: Record<string, unknown> = {}) => [win(five, patch), win(seven, patch, "seven_day")];
+const win = (usedPercent: number | null, patch: Record<string, unknown> = {}, id = "codex:primary_window") => ({ id, label: id, usedPercent, resetsAt: 5000, stale: false, inferred: false, fetchedAt: 990, ...patch });
+const pair = (five: number | null, seven: number | null = 10, patch: Record<string, unknown> = {}) => [win(five, patch), win(seven, patch, "codex:secondary_window")];
 const credits = (patch: Record<string, unknown> = {}) => ({ kind: "credits", fetchedAt: 990, stale: false, hasCredits: true, balance: "12.5", ...patch });
 const target = (windows: unknown[], paidUsage?: unknown) => ({ id: "acct-A", windows, paidUsage });
 async function exhaustedRun(usage: Usage) {
@@ -795,8 +796,8 @@ test("an exhausted target that regains headroom continues in the same switch", a
 test("target status unreadable, stale or unknown: continues as today and logs the uncertainty once", async () => {
   const vectors = [
     null, target([]), target(pair(100, 10, { stale: true })), target(pair(null)),
-    target([win(100), win(30, { stale: true }, "seven_day")]),
-    target([win(100, {}, "seven_day")]), // 5h row missing: the core says unknown, not exhausted
+    target([win(100), win(30, { stale: true }, "codex:secondary_window")]),
+    target([win(100, {}, "codex:secondary_window")]), // 5h row missing: the core says unknown, not exhausted
     target(pair(100, 100, { inferred: true })),
     target(pair(100, 100, { resetsAt: 900 })),
   ];
@@ -889,25 +890,29 @@ test("L4: waiting candidates expire after 7 days; log entries are cleared with t
   assert.equal(r.logs.filter((l) => /waiting for the next switch agent=a/.test(l)).length, 2);
 });
 
-test("M2: agents recovery handles are skipped by the handoff reopen; one reload per agent per switch", async () => {
-  const r = make(), port = new Fake();
-  port.add("a"); port.add("b");
-  await limit(r, "a");
-  await adopt(r, "txn:1");
-  assert.equal(r.recovery.handles("a"), true);
-  assert.equal(r.recovery.handles("b"), false);
-  // interleaving: the handoff reopens every agent unless recovery handles it, while recovery runs
-  const reopened: string[] = [];
-  const reopen = async () => {
-    for (const id of ["a", "b"]) {
-      if (r.recovery.handles(id)) continue;
-      await port.reload(id);
-      reopened.push(id);
-    }
-  };
-  await Promise.all([r.recovery.run(port), reopen()]);
-  await reopen(); // a later tick, after recovery sent: "a" is still not reloaded again
-  assert.equal(port.calls.filter((c) => c === "reload:a").length, 1);
-  assert.equal(port.calls.filter((c) => c === "reload:b").length, 2 /* the fake handoff reloads b on each of its two passes */);
-  assert.equal(port.sends().length, 1);
+
+// R2-H1: the exhaustion rule on a real-shaped Codex status (ids `bucket:window` as Status.swift emits them, the core's fixture account).
+import { readFileSync } from "node:fs";
+import { statusSchema } from "../shared/contracts.js";
+const realCodex = (windows: unknown[], paidUsage?: unknown) => {
+  const raw = JSON.parse(readFileSync(new URL("./fixtures-v090/status.json", import.meta.url), "utf8")).result;
+  const codex = raw.providers.find((p: { provider: string }) => p.provider === "codex");
+  codex.accounts[0].windows = windows;
+  if (paidUsage !== undefined) codex.accounts[0].paidUsage = paidUsage;
+  const parsed = statusSchema.parse(raw);
+  return parsed.providers.find((p) => p.provider === "codex")!.accounts[0]!;
+};
+const row = (id: string, usedPercent: number, extra: Record<string, unknown> = {}) => ({ id, label: id, inferred: false, usedPercent, resetsAt: 5000, fetchedAt: 990, stale: false, ...extra });
+test("R2-H1: the real Codex window ids (codex:primary_window, codex:secondary_window) drive the exhaustion rule", () => {
+  const now = 1000;
+  const noPaid = { kind: "credits", fetchedAt: 990, stale: false, hasCredits: false, balance: "0" };
+  const both = (a: number, b: number) => [row("codex:primary_window", a), row("codex:secondary_window", b)];
+  assert.equal(targetUsage(realCodex(both(100, 20), noPaid), now).verdict, "exhausted");
+  assert.equal(targetUsage(realCodex(both(20, 100), noPaid), now).verdict, "exhausted");
+  assert.equal(targetUsage(realCodex(both(20, 30), noPaid), now).verdict, "usable");
+  assert.equal(targetUsage(realCodex(both(100, 100), noPaid), now).verdict, "exhausted");
+  assert.equal(targetUsage(realCodex(both(100, 100), { kind: "credits", fetchedAt: 990, stale: false, hasCredits: true, balance: "9.5" }), now).verdict, "usable");
+  assert.equal(targetUsage(realCodex([row("codex:primary_window", 100)], noPaid), now).verdict, "unknown", "weekly window missing");
+  assert.equal(targetUsage(realCodex([...both(100, 20), row("spark:primary_window", 5, { stale: true })], noPaid), now).verdict, "unknown", "an additional stale bucket makes it unknown, as in the core");
+  assert.equal(targetUsage(realCodex(both(100, 20), noPaid), now).readAt, 990);
 });

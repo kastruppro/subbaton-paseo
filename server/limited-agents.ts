@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AgentPort, AgentSnapshot } from "./handoff.js";
 import type { Account, PaidUsage } from "../shared/contracts.js";
+import { ReloadLedger } from "./reload-ledger.js";
 
 // Limited Codex agent continuation (0.9.0). After a verified Codex account switch (the plugin's own
 // reload of an agent makes it adopt the new login; no daemon restart is needed), each Codex agent whose latest turn positively ended
@@ -47,8 +48,11 @@ export function paidEligible(paid: PaidUsage | undefined, now: number): boolean 
   if (paid.monthlyLimit !== undefined && paid.usedCredits !== undefined && paid.usedCredits >= paid.monthlyLimit) return false;
   return true;
 }
-/** Windows the core always requires on a Codex account (PolicyEngine adds the missing ones as unknown). */
-const requiredWindows = ["five_hour", "seven_day"];
+/**
+ * Windows the core always requires on a Codex account (PolicyEngine adds the missing ones as unknown). Real Codex
+ * status rows are `bucket:window` (Status.swift), the main bucket being `codex`: 5h and 7d.
+ */
+const requiredWindows = ["codex:primary_window", "codex:secondary_window"];
 export interface TargetUsage {
   verdict: "exhausted" | "usable" | "unknown";
   /** Oldest reading behind the verdict (windows, and the paid fallback when it was needed); null when unknown. */
@@ -124,8 +128,6 @@ export class LimitedAgentRecovery {
   private writes: Promise<unknown> = Promise.resolve();
   /** "Waiting" lines already logged, keyed `<agent>\0<tag>` (agent "" for per-switch lines). */
   private waitLogged = new Set<string>();
-  /** Agents recovery reloaded or is about to continue under the current switch (the handoff must not reload them again). */
-  private touched = new Set<string>();
 
   constructor(
     private store: RecoveryStore,
@@ -138,6 +140,8 @@ export class LimitedAgentRecovery {
     private log: (line: string) => void = (line) => console.log(line),
     /** The saved account with its windows and paid usage (the CLI's status --json); null when unreadable. Omitted: no check. */
     private accountUsage?: (accountId: string) => Promise<Account | null>,
+    /** Shared with the handoff: one reload per agent per switch. */
+    private ledger: ReloadLedger = new ReloadLedger(),
   ) {}
 
   private say(message: string) {
@@ -192,10 +196,6 @@ export class LimitedAgentRecovery {
   }
   private clearLogged(agentId: string) {
     for (const key of [...this.waitLogged]) if (key.startsWith(`${agentId}\0`)) this.waitLogged.delete(key);
-  }
-  /** True while recovery owns this agent's reload for the current switch: a candidate, or one it already reloaded. */
-  handles(agentId: string): boolean {
-    return this.candidates.has(agentId) || this.touched.has(agentId);
   }
   private forget(agentId: string, reason?: string) {
     this.clearLogged(agentId);
@@ -285,7 +285,6 @@ export class LimitedAgentRecovery {
       // The same switch adopted again keeps its original time, so candidates waiting for the next switch stay waiting.
       if (this.pending?.key === key && this.pending.accountId === current) return;
       this.clearLogged("");
-      this.touched.clear();
       this.pending = { key, accountId: current, since: Math.min(this.now(), switchedAt ?? Infinity) };
       this.say(`switch adopted key=${shortKey(key)} account=${current} candidates=${this.candidates.size}`);
     });
@@ -367,6 +366,7 @@ export class LimitedAgentRecovery {
     candidate.waiting = false;
     this.waitLogged.delete(`${agentId}\0next|${id}`);
     this.waitLogged.delete(`${agentId}\0exhausted|${id}`);
+    if (this.ledger.state(pending.key, agentId) === "inflight") return; // the handoff is reloading it; a later run continues
     const first = await this.eligible(port, pending, agentId, candidate, false);
     if (first.state === "wait") {
       // Runs fire on every finished turn host-wide; log the wait once, again only after it resolved.
@@ -382,15 +382,32 @@ export class LimitedAgentRecovery {
     this.say(`attempt persisted agent=${who} turn=${short(candidate.turnId)} key=${shortKey(pending.key)}`);
     const beforeReload = await this.eligible(port, pending, agentId, candidate, false).catch(() => ({ state: "drop" as const, reason: "check failed" }));
     if (beforeReload.state !== "ok" || !this.same(pending, agentId, candidate)) return drop(beforeReload.state === "drop" ? `${beforeReload.reason} (after persisting)` : "changed after persisting");
-    this.touched.add(agentId);
-    this.say(`reload started agent=${who}`);
-    try {
-      await withTimeout(port.reload(agentId), this.timeoutMs);
-    } catch {
-      this.candidates.get(agentId) === candidate && this.candidates.delete(agentId);
-      return void this.say(`reload failed agent=${who}, attempt consumed, no message`);
+    // One reload per agent per switch: the handoff may have reloaded this agent already.
+    const prior = this.ledger.state(pending.key, agentId);
+    if (prior === "inflight") {
+      // The handoff claimed it while the attempt was being saved: give the attempt back, the next run continues.
+      this.state.consumed = this.state.consumed.filter((v) => v !== id);
+      await this.persist();
+      return;
     }
-    this.say(`reload finished agent=${who}`);
+    if (prior === "failed") {
+      this.candidates.get(agentId) === candidate && this.candidates.delete(agentId);
+      return void this.say(`reload by the handoff failed agent=${who}, attempt consumed, no message`);
+    }
+    if (prior === "done") this.say(`reload already done by the handoff agent=${who}`);
+    else {
+      if (!this.ledger.claim(pending.key, agentId)) return;
+      this.say(`reload started agent=${who}`);
+      try {
+        await withTimeout(port.reload(agentId), this.timeoutMs);
+        this.ledger.finish(pending.key, agentId, true);
+      } catch {
+        this.ledger.finish(pending.key, agentId, false);
+        this.candidates.get(agentId) === candidate && this.candidates.delete(agentId);
+        return void this.say(`reload failed agent=${who}, attempt consumed, no message`);
+      }
+      this.say(`reload finished agent=${who}`);
+    }
     const second = await this.eligible(port, pending, agentId, candidate, true).catch(() => ({ state: "drop" as const, reason: "check failed" }));
     if (second.state !== "ok") {
       this.candidates.get(agentId) === candidate && this.candidates.delete(agentId);

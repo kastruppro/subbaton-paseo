@@ -48,13 +48,13 @@ export function registerHandoff(
     undefined,
     undefined,
     (id) => service.accountUsage("codex", id),
+    coordinator.ledger,
   );
   coordinator.onCodexAdopted = (key, account, switchedAt) =>
     void recovery
       .adopt(key, account, switchedAt)
       .then(() => recovery.run(latest))
       .catch(() => undefined);
-  coordinator.skipReopen = (id) => recovery.handles(id);
   const nudge = (port: AgentPort | null = latest) => void coordinator.tick(port).catch(() => undefined);
 
   server.handle(handoffStatusRpc, (_input, context) => {
@@ -97,7 +97,11 @@ export function registerHandoff(
     if (recovery.hasPending()) void recovery.run(port ?? latest).catch(() => undefined);
     nudge(port);
   });
-  const timer = setInterval(() => nudge(), intervalMs);
+  const timer = setInterval(() => {
+    // A parked candidate waits for a fresher target reading; no turn ends at the idle boundary to trigger a run.
+    if (recovery.hasPending()) void recovery.run(latest).catch(() => undefined);
+    nudge();
+  }, intervalMs);
   timer.unref?.();
   return {
     coordinator,

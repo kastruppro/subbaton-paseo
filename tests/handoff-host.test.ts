@@ -200,8 +200,8 @@ test("manual switch with the restart opt-in off continues the limited agent exac
 });
 test("the switch target is no longer active at the recheck: nothing is reloaded or sent", async () => {
   const { calls } = await manualFlow({ activeAfter: other });
-  // the existing handoff may reload idle agents; the limited agent c1 is neither reloaded nor sent anything
-  assert.deepEqual(calls.filter((c) => c.includes("c1")), []);
+  // the verified switch still reloads every agent that is not running (c1 stopped in an error), once; recovery sends nothing
+  assert.deepEqual(calls.filter((c) => c.includes("c1")), ["reload:c1"]);
   assert.deepEqual(calls.filter((c) => c.startsWith("send:")), []);
 });
 test("a second limited account after the switch is not continued", async () => {

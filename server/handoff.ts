@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
+import { ReloadLedger } from "./reload-ledger.js";
 import type { ActionResult } from "../shared/contracts.js";
 import {
   activePhases,
@@ -130,6 +131,8 @@ const interactiveExecutables = new Set(
   ],
 );
 const interactive = (name: string) => interactiveExecutables.has(name.replace(/^-/, "").toLowerCase());
+/** Not running a turn and safe to reload: idle, and for Codex also an agent that stopped in an error (for example a usage limit). */
+const reloadable = (provider: HandoffProvider, a: AgentSnapshot) => a.status === "idle" || (provider === "codex" && a.status === "error" && !a.activeTurn);
 const busyStatus = (a: AgentSnapshot) => a.activeTurn || a.status === "running" || a.status === "initializing";
 const terminal = (h: Handoff | null) => !h || !(activePhases as readonly string[]).includes(h.phase);
 const ok = (code: string, message: string): ActionResult => ({ outcome: "success", code, message });
@@ -148,8 +151,8 @@ export class HandoffCoordinator {
   private running = false;
   agentApiSeen = false;
   /** Called once per verified Codex switch with a known identity (account = switch target, when known). */
-  /** True for an agent the limited-agent recovery reloads itself this switch: the reopen leaves it alone (one reload per agent). */
-  skipReopen: ((agentId: string) => boolean) | null = null;
+  /** Shared with the limited-agent recovery: one reload per Codex agent per adopted switch. */
+  ledger = new ReloadLedger();
   onCodexAdopted: ((switchKey: string, account: string, switchedAt: number | null) => void) | null = null;
   private paseoAnchor: number | null;
   private listTimeoutMs: number;
@@ -523,7 +526,7 @@ export class HandoffCoordinator {
       });
       return;
     }
-    let affected = mine.filter((a) => a.status === "idle").map((a) => a.id);
+    let affected = mine.filter((a) => reloadable(h.provider, a)).map((a) => a.id);
     if (h.target === null) {
       const settings = await this.settings();
       if (!settings.reloadCodexAfterAutomaticSwitch) affected = [];
@@ -639,7 +642,7 @@ export class HandoffCoordinator {
     await this.persist();
     // Review L1: re-check right before the CLI runs; anything busy or a changed idle set goes back to waiting.
     const again = (await agents.list()).filter((a) => a.provider === paseoProviderId[h.provider]);
-    const idleNow = again.filter((a) => a.status === "idle").map((a) => a.id).sort();
+    const idleNow = again.filter((a) => reloadable(h.provider, a)).map((a) => a.id).sort();
     if (again.some(busyStatus) || idleNow.join() !== [...affected].sort().join()) {
       this.update(h, { phase: "waiting", affected: [], code: "becameBusy", message: "An agent started a turn or the set of agents changed; waiting again." });
       return;
@@ -673,6 +676,7 @@ export class HandoffCoordinator {
           deadline: this.now() + (await this.settings()).idleWaitMinutes * 60,
           daemonOutcome,
           code: out.kind === "switched" ? "switched" : "alreadyActive",
+          ...(h.provider === "codex" && out.kind === "switched" && out.transaction ? { switchKey: "txn:" + out.transaction } : {}),
           message: reload ? "Switch verified. Reopening agents with their saved conversations." : out.kind === "switched" ? "Switch verified. No Paseo agents needed reopening." : "That account was already active.",
         });
         if (h.provider === "codex" && out.kind === "switched" && out.transaction)
@@ -705,11 +709,6 @@ export class HandoffCoordinator {
     let waiting = 0;
     for (const id of h.affected) {
       if (h.reopened.includes(id) || h.failedReopen.includes(id)) continue;
-      if (h.provider === "codex" && this.skipReopen?.(id)) {
-        // Recovery reloads this limited agent once and continues it; a second reload could interrupt that turn.
-        h.reopened.push(id);
-        continue;
-      }
       // Review M1: read this agent's state immediately before its reload; earlier reloads take time.
       const snap = (await agents.list()).find((a) => a.id === id);
       if (!snap) {
@@ -721,10 +720,18 @@ export class HandoffCoordinator {
         waiting++;
         continue;
       }
+      // One reload per Codex agent per adopted switch, shared with the limited-agent recovery.
+      const key = h.provider === "codex" ? (h.switchKey ?? h.id) : null;
+      if (key !== null && !this.ledger.claim(key, id)) {
+        h.reopened.push(id);
+        continue;
+      }
       try {
         await agents.reload(id);
+        if (key !== null) this.ledger.finish(key, id, true);
         h.reopened.push(id);
       } catch {
+        if (key !== null) this.ledger.finish(key, id, false);
         h.failedReopen.push(id);
       }
     }

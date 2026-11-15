@@ -105,6 +105,7 @@ const setup = (settings: Partial<HandoffSettings> = {}, initial: unknown = null,
   const cli = new FakeCli();
   const agents = new FakeAgents();
   const store = new MemoryStore(initial, failLoad);
+  const logs: string[] = [];
   let now = 1000;
   const coordinator = new HandoffCoordinator(
     cli,
@@ -115,9 +116,9 @@ const setup = (settings: Partial<HandoffSettings> = {}, initial: unknown = null,
       let n = 0;
       return () => `h${++n}`;
     })(),
-    { paseoAnchor: paseoPid, ...options },
+    { paseoAnchor: paseoPid, log: (line: string) => void logs.push(line), ...options },
   );
-  return { cli, agents, store, coordinator, advance: (s: number) => (now += s) };
+  return { cli, agents, store, coordinator, logs, advance: (s: number) => (now += s) };
 };
 
 test("agy: waits for idle, stops only via the CLI, switches, then reloads only the affected agy agents", async () => {
@@ -1040,4 +1041,79 @@ test("R4-L3: the daemon-pending fallback marks an overwritten reopening handoff 
   assert.equal(first.code, "superseded");
   assert.equal(first.phase, "done");
   assert.equal(coordinator.status().handoffs.codex?.code === "daemonPending" || coordinator.status().handoffs.codex?.restartDaemon === true, true);
+});
+
+// 0.9.7: the handoff logs every decision to the plugin log (prefix, short agent ids and the switch key only).
+const hasLine = (logs: string[], re: RegExp) => logs.some((l) => re.test(l));
+const assertLogSafe = (logs: string[]) => {
+  for (const line of logs) {
+    assert.ok(line.startsWith("[subbaton] handoff: "), line);
+    assert.ok(!/\n/.test(line), "one line per decision");
+    assert.ok(!/[\w.+-]+@[\w-]+\.[\w.-]+/.test(line), `no e-mail addresses: ${line}`);
+    assert.ok(!/(sk-[A-Za-z0-9]|Bearer|eyJ[A-Za-z0-9]|refresh|access_?token|auth\.json|password|secret)/i.test(line), `no secrets: ${line}`);
+  }
+};
+test("log: a Codex switch logs the adoption with counts, each reload, the queued busy agent and the finish", async () => {
+  const { cli, agents, coordinator, logs } = setup();
+  cli.outcome = { kind: "switched", code: "switched", message: "ok", daemonOutcome: "not-requested", transaction: "T7" };
+  agents.agents = [agent("c1aaaaaaaa", "codex"), agent("c2bbbbbbbb", "codex", "error"), agent("c3cccccccc", "codex", "running", true), agent("c4dddddddd", "codex", "closed")];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  await coordinator.tick(agents);
+  assert.ok(hasLine(logs, /switch adopted provider=codex key=txn:T7 trigger=manual agents idle=1 error=1 running=1 closed=1 \(closed: not loaded, starts on the new login when opened\)/), logs.join("\n"));
+  assert.ok(hasLine(logs, /reload started agent=c1aaaaaa status=idle key=txn:T7/));
+  assert.ok(hasLine(logs, /reload finished agent=c1aaaaaa/));
+  assert.ok(hasLine(logs, /reload started agent=c2bbbbbb status=error/));
+  assert.equal(logs.filter((l) => /agent=c3cccccc is running, reload queued until idle/.test(l)).length, 1, "queued once, not on every tick");
+  assert.ok(!hasLine(logs, /agent=c4dddddd/), "a closed agent is not an agent decision");
+  assert.ok(!hasLine(logs, /reopen finished/), "not finished while an agent still runs");
+  agents.agents[2] = agent("c3cccccccc", "codex");
+  await coordinator.tick(agents);
+  assert.ok(hasLine(logs, /reload finished agent=c3cccccc/));
+  assert.ok(hasLine(logs, /reopen finished provider=codex key=txn:T7 reloaded=3 skipped=0 failed=0 closed=1 \(not loaded, starts on the new login when opened\)/), logs.join("\n"));
+  assertLogSafe(logs);
+});
+test("log: a failed reload, a vanished agent and a reload done by the recovery are logged with the reason", async () => {
+  const { cli, agents, coordinator, logs } = setup();
+  cli.outcome = { kind: "switched", code: "switched", message: "ok", daemonOutcome: "not-requested", transaction: "T8" };
+  agents.agents = [agent("f1aaaaaaaa", "codex"), agent("f2bbbbbbbb", "codex")];
+  agents.failReload.add("f1aaaaaaaa");
+  coordinator.ledger.claim("txn:T8", "f2bbbbbbbb"); // the limited-agent recovery got there first
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  assert.ok(hasLine(logs, /reload failed agent=f1aaaaaa key=txn:T8/));
+  assert.ok(hasLine(logs, /reload skipped agent=f2bbbbbb reason=already reloaded for this switch by the limited-agent recovery/));
+  assert.ok(hasLine(logs, /reopen finished provider=codex key=txn:T8 reloaded=0 skipped=1 \(1 by the limited-agent recovery\) failed=1/), logs.join("\n"));
+  assertLogSafe(logs);
+});
+test("log: a superseded reopening handoff is logged", async () => {
+  const { cli, agents, coordinator, advance, logs } = setup();
+  cli.events_ = [];
+  agents.agents = [agent("s1aaaaaaaa", "codex", "running", true)];
+  await coordinator.request("codex", target);
+  await coordinator.tick(agents);
+  advance(61);
+  cli.events_ = [{ at: 1060, provider: "codex", kind: "automaticSwitch", target }];
+  await coordinator.tick(agents);
+  assert.ok(hasLine(logs, /superseded provider=codex key=\S+ by a newer switch, 1 agent not yet reloaded, the newer switch reloads them/), logs.join("\n"));
+  assertLogSafe(logs);
+});
+test("log: the agy renewal-only path, stoppedNoSwitch and the hold are logged", async () => {
+  const { cli, agents, coordinator, advance, logs } = setup();
+  agents.agents = [agent("g1aaaaaaaa", "antigravity")];
+  cli.processes = [proc(11)];
+  cli.plan = { ok: true, blockedOnlyByProcesses: true, target: null, renewalOnly: true };
+  cli.autoOutcome = { kind: "stoppedNoSwitch", code: "stoppedNoSwitch", message: "ok", manualResumeRequired: true };
+  advance(61);
+  await coordinator.tick(agents);
+  assert.ok(hasLine(logs, /agy renewal-only run planned/));
+  assert.ok(hasLine(logs, /agy stoppedNoSwitch \(renewal only\) no switch was needed, 1 idle agent stopped, manualResumeRequired=true, renewal runs held 30 minutes/), logs.join("\n"));
+  assert.ok(hasLine(logs, /reload started agent=g1aaaaaa/));
+  assert.ok(hasLine(logs, /reopen finished provider=agy/));
+  advance(61);
+  await coordinator.tick(agents);
+  advance(61);
+  await coordinator.tick(agents);
+  assert.equal(logs.filter((l) => /agy renewal-only plan skipped/.test(l)).length, 1, "the hold is logged once");
+  assertLogSafe(logs);
 });

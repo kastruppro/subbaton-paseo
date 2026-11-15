@@ -87,6 +87,8 @@ export interface CoordinatorOptions {
   reloadTimeoutMs?: number;
   /** How long request/control wait for a running step before answering busy. */
   fastWaitMs?: number;
+  /** One line per decision; the plugin's stdout shows in `paseo plugin logs subbaton`. */
+  log?: (line: string) => void;
 }
 const withTimeout = <T>(work: Promise<T>, ms: number): Promise<T> =>
   new Promise<T>((resolve, reject) => {
@@ -137,6 +139,20 @@ const interactive = (name: string) => interactiveExecutables.has(name.replace(/^
 const reloadable = (provider: HandoffProvider, a: AgentSnapshot) => a.status === "idle" || (provider === "codex" && a.status === "error" && !a.activeTurn);
 /** After agy sessions were stopped for renewal without a switch, no further renewal-only stop for this long. */
 export const AGY_RENEW_HOLD_SECONDS = 30 * 60;
+export const handoffLogPrefix = "[subbaton] handoff:";
+const shortId = (id: string) => id.slice(0, 8);
+const shortKey = (key: string) => (key.length > 40 ? key.slice(0, 40) + "…" : key);
+const countByStatus = (agents: AgentSnapshot[]) => {
+  const counts = { idle: 0, error: 0, running: 0, closed: 0, other: 0 };
+  for (const a of agents) {
+    if (busyStatus(a)) counts.running++;
+    else if (a.status === "idle") counts.idle++;
+    else if (a.status === "error") counts.error++;
+    else if (a.status === "closed") counts.closed++;
+    else counts.other++;
+  }
+  return counts;
+};
 const MANUAL_RESUME_NOTE = " A stopped session had no saved conversation ID (no saved conversation), so that agent may start without its thread.";
 /** A Codex handoff that already switched and only waits to reload running agents one by one may be taken over by a newer switch. */
 const supersedable = (h: Handoff | null) => !!h && h.provider === "codex" && h.phase === "reopening";
@@ -169,6 +185,24 @@ export class HandoffCoordinator {
   private listTimeoutMs: number;
   private reloadTimeoutMs: number;
   private fastWaitMs: number;
+  private logLine: (line: string) => void;
+  /** Lines logged once per handoff/agent, and per-handoff counts for the "reopen finished" line (memory only). */
+  private logged = new Set<string>();
+  private stats = new Map<string, { closed: number; byRecovery: number; gone: number }>();
+  /** Log lines carry the prefix, short agent ids and switch keys only (never prompts, tokens or agent output). */
+  private say(message: string) {
+    try {
+      this.logLine(`${handoffLogPrefix} ${message}`);
+    } catch {
+      // logging never changes a decision
+    }
+  }
+  private sayOnce(key: string, message: string) {
+    if (this.logged.has(key)) return;
+    if (this.logged.size > 2000) this.logged.clear();
+    this.logged.add(key);
+    this.say(message);
+  }
 
   constructor(
     private cli: HandoffCli,
@@ -183,6 +217,7 @@ export class HandoffCoordinator {
     this.listTimeoutMs = options.listTimeoutMs ?? 10_000;
     this.reloadTimeoutMs = options.reloadTimeoutMs ?? 60_000;
     this.fastWaitMs = options.fastWaitMs ?? 2_000;
+    this.logLine = options.log ?? ((line) => console.log(line));
   }
 
   /** Loads persisted state once. A handoff interrupted while the CLI switch ran becomes uncertain. */
@@ -440,6 +475,7 @@ export class HandoffCoordinator {
   /** Ends an open handoff that a newer one takes over. Only claims coverage when the newer handoff will reload. */
   private supersede(old: Handoff, newerReloads: boolean) {
     const open = old.affected.filter((id) => !old.reopened.includes(id) && !old.failedReopen.includes(id)).length;
+    this.say(`superseded provider=${old.provider} key=${shortKey(old.switchKey ?? old.id)} by a newer switch, ${open} ${open === 1 ? "agent" : "agents"} not yet reloaded${newerReloads ? ", the newer switch reloads them" : ", the newer switch does not reload (setting off)"}`);
     this.update(old, {
       phase: "done",
       code: "superseded",
@@ -504,7 +540,11 @@ export class HandoffCoordinator {
     // A renewal-only trigger has no known target yet (the final plan decides after the renewal).
     if (!plan.ok || !plan.blockedOnlyByProcesses) return;
     // After a stoppedNoSwitch, renewal-only runs wait (like agyRetryAt, in memory); a plan with a real target may still switch.
-    if (plan.renewalOnly && this.now() < this.agyRenewHoldUntil) return;
+    if (plan.renewalOnly && this.now() < this.agyRenewHoldUntil) {
+      this.sayOnce(`hold|${Math.floor(this.agyRenewHoldUntil)}`, `agy renewal-only plan skipped, held until the 30 minute hold after the last stoppedNoSwitch ends`);
+      return;
+    }
+    if (plan.renewalOnly) this.say(`agy renewal-only run planned (no target yet): candidate accounts need renewal, idle Paseo agy agents will be stopped and reopened`);
     const now = this.now();
     this.state.handoffs.agy = {
       id: this.newId(),
@@ -600,6 +640,9 @@ export class HandoffCoordinator {
       });
       // Adoption: a verified switch. The plugin's own reload of a limited agent adopts the new login;
       // a successful daemon restart is not required (and is never enabled for this).
+      const counts = countByStatus(mine);
+      this.stats.set(h.id, { closed: counts.closed, byRecovery: 0, gone: 0 });
+      this.say(`switch adopted provider=codex key=${shortKey(h.switchKey ?? h.id)} trigger=${h.trigger} agents idle=${counts.idle} error=${counts.error} running=${counts.running} closed=${counts.closed} (closed: not loaded, starts on the new login when opened)${affected.length === 0 ? ", no reload (setting off or none to reload)" : ""}`);
       if (h.switchKey && h.switchTarget) this.onCodexAdopted?.(h.switchKey, h.switchTarget, h.switchedAt);
       return;
     }
@@ -716,6 +759,11 @@ export class HandoffCoordinator {
           ...(h.provider === "codex" && out.kind === "switched" && out.transaction ? { switchKey: "txn:" + out.transaction } : {}),
           message: reload ? "Switch verified. Reopening agents with their saved conversations." : out.kind === "switched" ? "Switch verified. No Paseo agents needed reopening." : "That account was already active.",
         });
+        if (out.kind === "switched") {
+          const counts = countByStatus(mine);
+          this.stats.set(h.id, { closed: counts.closed, byRecovery: 0, gone: 0 });
+          this.say(`switch adopted provider=${h.provider} key=${shortKey(h.switchKey ?? h.id)} trigger=${h.trigger} agents idle=${counts.idle} error=${counts.error} running=${counts.running} closed=${counts.closed} (closed: not loaded, starts on the new login when opened)`);
+        } else this.say(`switch not needed provider=${h.provider} key=${shortKey(h.switchKey ?? h.id)}, that account was already active, ${affected.length} ${affected.length === 1 ? "agent" : "agents"} left as they are`);
         if (h.provider === "codex" && out.kind === "switched" && out.transaction)
           this.onCodexAdopted?.("txn:" + out.transaction, h.target!, this.now());
         return;
@@ -724,6 +772,7 @@ export class HandoffCoordinator {
         // agy renewal before a switch stopped the sessions, then the final policy chose not to switch: nothing was
         // switched, but the stopped sessions are resumed exactly as after a switch (agent.reload() reopens them).
         this.noSwitch.set(h.id, out.manualResumeRequired === true);
+        this.say(`agy stoppedNoSwitch ${h.target === null ? "(renewal only) " : ""}no switch was needed, ${affected.length} idle ${affected.length === 1 ? "agent" : "agents"} stopped, manualResumeRequired=${out.manualResumeRequired === true}, renewal runs held ${AGY_RENEW_HOLD_SECONDS / 60} minutes`);
         this.agyRenewHoldUntil = this.now() + AGY_RENEW_HOLD_SECONDS;
         this.update(h, {
           phase: affected.length > 0 ? "reopening" : "done",
@@ -758,40 +807,56 @@ export class HandoffCoordinator {
 
   private async reopen(h: Handoff, agents: AgentPort, _settings: HandoffSettings) {
     let waiting = 0;
+    const logKey = shortKey(h.switchKey ?? h.id);
+    const stat = this.stats.get(h.id) ?? { closed: 0, byRecovery: 0, gone: 0 };
+    this.stats.set(h.id, stat);
     for (const id of h.affected) {
       if (h.reopened.includes(id) || h.failedReopen.includes(id)) continue;
       // Review M1: read this agent's state immediately before its reload; earlier reloads take time.
       const snap = (await agents.list()).find((a) => a.id === id);
       if (!snap) {
         h.failedReopen.push(id);
+        stat.gone++;
+        this.say(`reload skipped agent=${shortId(id)} reason=agent gone or archived key=${logKey}`);
         continue;
       }
       if (busyStatus(snap)) {
         // reload() interrupts a running turn, so a busy agent waits for a later tick.
         waiting++;
+        this.sayOnce(`queued|${h.id}|${id}`, `agent=${shortId(id)} is running, reload queued until idle key=${logKey}`);
         continue;
       }
       // One reload per Codex agent per adopted switch, shared with the limited-agent recovery.
       const key = h.provider === "codex" ? (h.switchKey ?? h.id) : null;
       if (key !== null && !this.ledger.claim(key, id)) {
         h.reopened.push(id);
+        stat.byRecovery++;
+        this.say(`reload skipped agent=${shortId(id)} reason=already reloaded for this switch by the limited-agent recovery key=${logKey}`);
         continue;
       }
+      this.say(`reload started agent=${shortId(id)} status=${snap.status} key=${logKey}`);
       try {
         await agents.reload(id);
         if (key !== null) this.ledger.finish(key, id, true);
         h.reopened.push(id);
+        this.say(`reload finished agent=${shortId(id)} key=${logKey}`);
       } catch {
         if (key !== null) this.ledger.finish(key, id, false);
         h.failedReopen.push(id);
+        this.say(`reload failed agent=${shortId(id)} key=${logKey}`);
       }
     }
+    const finished = (extra = "") => {
+      const loaded = h.reopened.length - stat.byRecovery;
+      this.say(`reopen finished provider=${h.provider} key=${logKey} reloaded=${loaded} skipped=${stat.byRecovery + stat.gone}${stat.byRecovery ? ` (${stat.byRecovery} by the limited-agent recovery)` : ""}${stat.gone ? ` (${stat.gone} gone or archived)` : ""} failed=${h.failedReopen.length - stat.gone} closed=${stat.closed} (not loaded, starts on the new login when opened)${extra}`);
+    };
     if (waiting > 0) {
       // Per-agent Codex reloads have no deadline: a running agent is reloaded whenever it becomes idle, for as long as
       // this switch is the current one (a newer switch supersedes it). Only the daemon-restart and agy handoffs time out.
       const perAgent = h.provider === "codex" && !h.restartDaemon;
       if (!perAgent && this.now() > h.deadline) {
         const closed = h.provider === "agy";
+        finished(`, ${waiting} still running after the wait, not reloaded`);
         this.update(h, {
           phase: closed ? "failed" : "done",
           waitingFor: 0,
@@ -806,6 +871,7 @@ export class HandoffCoordinator {
       return;
     }
     const failed = h.failedReopen.length;
+    finished();
     this.update(h, {
       phase: failed ? "failed" : "done",
       waitingFor: 0,

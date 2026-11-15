@@ -89,9 +89,9 @@ test("FC-2: every footer cell has a spoken label naming stale, unknown, near lim
   const agy = footerCell({ provider: "agy", windowId: "claude-gpt:5h", account: acct(), window: win({ id: "claude-gpt:5h", usedPercent: 80 }) }, { warning: 80, danger: 100, offline: false, narrow: true, now: 50 });
   assert.equal(footerSpeech("agy", agy), "agy Claude and GPT 5 hours, 80 percent used, near limit", "short visual labels are spoken in full");
   const codex = footerCell({ provider: "codex", windowId: "paid", account: acct({ paidUsage: { kind: "credits", fetchedAt: 40, stale: false, hasCredits: true, balance: "12.50" } }), window: null }, { warning: 80, danger: 100, offline: false, narrow: false, now: 50 });
-  assert.equal(footerSpeech("codex", codex), "Codex credits, 12.50");
+  assert.equal(footerSpeech("codex", codex), "Codex credits, 12 credits");
   const stale = footerCell({ provider: "codex", windowId: "paid", account: acct({ paidUsage: { kind: "credits", fetchedAt: 1, stale: true, hasCredits: true, balance: "12.50" } }), window: null }, { warning: 80, danger: 100, offline: false, narrow: false, now: 50 });
-  assert.equal(footerSpeech("codex", stale), "Codex credits, about 12.50, stale");
+  assert.equal(footerSpeech("codex", stale), "Codex credits, about 12 credits, stale");
   const none = footerCell({ provider: "claude", windowId: "paid", account: acct(), window: null }, { warning: 80, danger: 100, offline: false, narrow: false, now: 50 });
   assert.equal(footerSpeech("claude", none), "Claude extra usage, unknown");
 });

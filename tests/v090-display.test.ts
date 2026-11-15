@@ -45,7 +45,7 @@ test("Codex credits are shown in credits, estimates as estimates, resets separat
   const codex = statusSchema.parse(read("status.json").result).providers[1]!.accounts[0]!;
   const lines = paidUsageLines("codex", codex, NOW);
   assert.deepEqual(lines.map((l) => l.text), [
-    "Credits: 12.50 credits · estimate: about 24 local or 4 cloud messages",
+    "Credits: 12.5 credits · estimate: about 24 local or 4 cloud messages",
     "Banked resets: 2",
   ]);
   assert.equal(lines[0]!.stale, false);
@@ -56,7 +56,7 @@ test("zero, unlimited, partial and stale Codex credits", () => {
   assert.equal(paidUsageLines("codex", parse("unlimited"), NOW)[0]!.text, "Credits: unlimited");
   assert.equal(paidUsageLines("codex", parse("partial"), NOW)[0]!.text, "Credits: unknown");
   const stale = paidUsageLines("codex", parse("stale"), NOW)[0]!;
-  assert.equal(stale.text, "Credits (stale): ~12.50 credits");
+  assert.equal(stale.text, "Credits (stale): ~12.5 credits");
   assert.equal(stale.stale, true);
   // fresh flag but older than 180 s counts as stale
   const old = accountSchema.parse({ ...(accounts.missing as object), paidUsage: { kind: "credits", fetchedAt: NOW - 181, stale: false, hasCredits: true, balance: "3" } });
@@ -86,14 +86,14 @@ test("Credits footer item states", () => {
   const codex = statusSchema.parse(read("status.json").result).providers[1]!.accounts[0]!;
   const claude = statusSchema.parse(read("status.json").result).providers[0]!.accounts[0]!;
   const c = cell("codex", codex);
-  assert.deepEqual([c.label, c.percent, c.meter, c.kind], ["Credits", "12.50", false, "value"]);
+  assert.deepEqual([c.label, c.percent, c.meter, c.kind], ["Credits", "12.5", false, "value"]);
   assert.equal(cell("codex", codex, true).label, "Cr");
   assert.equal(cell("claude", claude).percent, "On");
   assert.equal(cell("claude", claude).label, "Extra");
   assert.equal(cell("codex", parse("unlimited")).percent, "∞");
   assert.equal(cell("codex", parse("zero")).percent, "0");
   const stale = cell("codex", parse("stale"));
-  assert.deepEqual([stale.kind, stale.percent, stale.clock], ["stale", "~12.50", true]);
+  assert.deepEqual([stale.kind, stale.percent, stale.clock], ["stale", "~12.5", true]);
   assert.deepEqual([cell("codex", parse("partial")).kind, cell("codex", parse("partial")).percent], ["unknown", "—"]);
   assert.equal(cell("codex", null).kind, "unknown");
   assert.equal(cell("claude", parse("claude-unknown-cap")).percent, "On");

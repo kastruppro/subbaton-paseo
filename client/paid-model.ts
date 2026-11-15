@@ -1,5 +1,6 @@
 import type { Account, PaidUsage, Provider } from "../shared/contracts.js";
 import { relativeAge } from "./display.js";
+import { formatCredits, formatCreditsWhole } from "./credits-format.js";
 
 /** Paid availability is fresh for at most 180 seconds, even if the CLI's flag says fresh. */
 export const paidFreshSeconds = 180;
@@ -22,9 +23,18 @@ export function paidFooterValue(provider: Provider, paid: PaidUsage | undefined)
     return paid.kind !== "extraUsage" || paid.enabled === undefined ? null : paid.enabled ? "On" : "Off";
   if (provider !== "codex" || paid.kind !== "credits") return null;
   if (paid.unlimited === true) return "∞";
-  if (paid.balance !== undefined && paid.balance.trim() !== "") return paid.balance;
+  if (paid.balance !== undefined && paid.balance.trim() !== "") return formatCredits(paid.balance);
   if (paid.hasCredits === false) return "0";
   return null;
+}
+/** Spoken value for the footer item: whole credits ("71,023 credits"), unlimited, or the Claude state. */
+export function paidSpokenValue(provider: Provider, paid: PaidUsage | undefined): string | null {
+  const value = paidFooterValue(provider, paid);
+  if (value === null || !paid) return null;
+  if (provider !== "codex") return value;
+  if (paid.unlimited === true) return "unlimited";
+  if (paid.balance !== undefined && paid.balance.trim() !== "") return `${formatCreditsWhole(paid.balance)} credits`;
+  return `${value} credits`;
 }
 
 /** Account-detail lines for paid usage and banked resets. Units and estimates are never converted. */
@@ -42,8 +52,9 @@ export function paidUsageLines(
     let text: string;
     if (balance === "unlimited") text = prefix + "unlimited";
     else if (balance !== null) {
-      const zero = paid.hasCredits === false && Number(balance) === 0;
-      text = zero ? prefix + `none (${balance} credits)` : `${prefix}${stale ? "~" : ""}${balance} credits`;
+      const shown = formatCredits(balance);
+      const zero = paid.hasCredits === false && shown === "0";
+      text = zero ? prefix + `none (${shown} credits)` : `${prefix}${stale ? "~" : ""}${shown} credits`;
     } else if (paid.hasCredits === false) text = prefix + "none";
     else if (paid.hasCredits === true) text = prefix + "available; balance unknown";
     else text = prefix + "unknown";

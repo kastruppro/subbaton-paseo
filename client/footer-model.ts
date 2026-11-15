@@ -2,7 +2,7 @@ import type { Account, Provider, Window } from "../shared/contracts.js";
 import { maxFooterItems } from "../shared/contracts.js";
 import { percentText, providerLabel, severity, stale } from "./display.js";
 import { isModelQuota, windowLabel } from "./popover-model.js";
-import { paidFooterValue, paidStale } from "./paid-model.js";
+import { paidFooterValue, paidSpokenValue, paidStale } from "./paid-model.js";
 
 /** Three equal columns like Paseo's CPU / Memory / Disk box; 1-3 items one row, 4-6 two rows. */
 export function footerGrid(count: number) {
@@ -31,6 +31,8 @@ export type FooterCell = {
   meter: boolean;
   /** Text colour token: the host foreground (as in Paseo's CPU box), status colour only near or at the limit. */
   textTone: "text" | "warning" | "danger";
+  /** Credits item only: the value as spoken ("71,023 credits"). */
+  spokenValue?: string;
   /** Full spoken name of the item without the provider, e.g. "Claude and GPT 5 hours" or "credits". */
   spoken: string;
 };
@@ -134,6 +136,7 @@ function paidCell(provider: Provider, account: Account | null, narrow: boolean, 
     meter: false,
     textTone: "text",
     spoken,
+    ...(paidSpokenValue(provider, account.paidUsage) ? { spokenValue: paidSpokenValue(provider, account.paidUsage)! } : {}),
   };
 }
 
@@ -145,7 +148,7 @@ export function footerSpeech(provider: Provider, cell: FooterCell): string {
     return cell.percent === "100%" ? `${subject}, 100 percent used, exhausted` : `${subject}, unavailable`;
   const stale = cell.kind === "stale";
   if (!cell.meter) {
-    const value = (stale ? cell.percent.replace(/^~/, "") : cell.percent).replace("∞", "unlimited");
+    const value = cell.spokenValue ?? (stale ? cell.percent.replace(/^~/, "") : cell.percent).replace("∞", "unlimited");
     return stale ? `${subject}, about ${value}, stale` : `${subject}, ${value}`;
   }
   const estimated = cell.percent.startsWith("≈");

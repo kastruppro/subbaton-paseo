@@ -175,15 +175,16 @@ export class LimitedAgentRecovery {
   }
 
   /**
-   * A verified Codex switch. `expectedAccount` (the switch target, when known) must be the account that
-   * is active now; `switchedAt` is when the switch happened (default: now), so a limit that ended after
+   * A verified Codex switch. `expectedAccount` (the verified switch target, required) must be the account
+   * that is active now; `switchedAt` is when the switch happened (default: now), so a limit that ended after
    * it, on the new login, is never recovered. A newer adoption supersedes a pending one.
    */
-  adopt(key: string, expectedAccount: string | null, switchedAt: number | null = null): Promise<void> {
+  adopt(key: string, expectedAccount: string, switchedAt: number | null = null): Promise<void> {
     return this.serial(async () => {
       await this.init();
       const current = await this.currentAccount().catch(() => null);
-      if (!this.trusted || !current || (expectedAccount !== null && expectedAccount !== current)) {
+      // An unknown switch target fails closed: the attempt is never bound to whatever login is current later.
+      if (!this.trusted || !current || typeof expectedAccount !== "string" || !expectedAccount || expectedAccount !== current) {
         this.pending = null;
         return;
       }
@@ -225,25 +226,38 @@ export class LimitedAgentRecovery {
 
   private async attempt(port: AgentPort, pending: Pending, agentId: string, candidate: Candidate) {
     const send = port.send!.bind(port);
+    const drop = () => void (this.candidates.get(agentId) === candidate && this.candidates.delete(agentId));
     if (candidate.at >= pending.since) return void this.candidates.delete(agentId);
     const id = `${pending.key}|${agentId}|${candidate.turnId}`;
     if (this.state.consumed.includes(id)) return void this.candidates.delete(agentId);
     const first = await this.eligible(port, pending, agentId, candidate, false);
     if (first === "wait") return;
-    if (first === "drop") return void (this.candidates.get(agentId) === candidate && this.candidates.delete(agentId));
-    // Reload, then recheck; a failed reload or send consumes the attempt.
-    if (!(await this.consume(id))) return void this.candidates.delete(agentId);
+    if (first === "drop") return drop();
+    // Every side effect is preceded by a fresh eligibility check made after the previous persistence
+    // step finished, and by a synchronous identity check with no await in between.
+    if (!(await this.consume(id))) return drop();
+    const beforeReload = await this.eligible(port, pending, agentId, candidate, false).catch(() => "drop" as const);
+    if (beforeReload !== "ok" || !this.same(pending, agentId, candidate)) return drop();
     try {
       await withTimeout(port.reload(agentId), this.timeoutMs);
     } catch {
-      return void this.candidates.delete(agentId);
+      return drop();
     }
     const second = await this.eligible(port, pending, agentId, candidate, true).catch(() => "drop" as const);
-    if (second !== "ok") return void (this.candidates.get(agentId) === candidate && this.candidates.delete(agentId));
-    this.candidates.delete(agentId);
+    if (second !== "ok") return drop();
+    // Mark the continuation before sending so a restart between the two cannot treat it as user activity.
     this.dropLineage(agentId);
-    this.state.lineage.push({ agentId, state: "sent", turnId: null });
-    if (!(await this.persist())) return;
+    const mark = { agentId, state: "sent" as const, turnId: null };
+    this.state.lineage.push(mark);
+    const saved = await this.persist();
+    const beforeSend = saved ? await this.eligible(port, pending, agentId, candidate, true).catch(() => "drop" as const) : "drop";
+    if (beforeSend !== "ok" || !this.same(pending, agentId, candidate) || this.lineageOf(agentId) !== mark) {
+      // Nothing was sent: remove the marker so a later turn is not mistaken for a continuation.
+      if (this.lineageOf(agentId) === mark) this.dropLineage(agentId);
+      await this.persist();
+      return drop();
+    }
+    this.candidates.delete(agentId);
     try {
       await withTimeout(send(agentId, continuationText), this.timeoutMs);
     } catch {

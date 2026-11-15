@@ -51,7 +51,7 @@ async function limit(r: ReturnType<typeof make>, id: string, turn = "t1", worksp
 }
 const adopt = async (r: ReturnType<typeof make>, key = "txn:1") => {
   r.clock.t += 1;
-  await r.recovery.adopt(key, null);
+  await r.recovery.adopt(key, r.account.v as string);
 };
 
 test("limit detection: structured code or an anchored terminal message only", () => {
@@ -245,10 +245,10 @@ test("plugin restart: consumed attempts persist, candidates are not rebuilt from
   assert.equal(port.sends().length, 1);
   // restart: a fresh instance with the same store sees the old limit in agent history only
   r = make({ store }); 
-  await r.recovery.adopt("txn:1", null);
+  await r.recovery.adopt("txn:1", "acct-A");
   await r.recovery.run(port);
   assert.equal(port.sends().length, 1);
-  await r.recovery.adopt("txn:2", null);
+  await r.recovery.adopt("txn:2", "acct-A");
   await r.recovery.run(port);
   assert.equal(port.sends().length, 1);
 });
@@ -335,7 +335,7 @@ test("a limit that ended after the switch time is a second limited account, even
   await r.recovery.turnBefore(codexAgent("a"), "t1");
   await r.recovery.turnAfter(codexAgent("a"), "t1", failed()); // ended at 2100
   r.clock.t = 2200;
-  await r.recovery.adopt("txn:late", null, 2050); // the switch happened at 2050
+  await r.recovery.adopt("txn:late", "acct-A", 2050); // the switch happened at 2050
   await r.recovery.run(port);
   assert.deepEqual(port.calls, []);
   port.add("b");
@@ -343,7 +343,112 @@ test("a limit that ended after the switch time is a second limited account, even
   await r.recovery.turnBefore(codexAgent("b"), "t1");
   await r.recovery.turnAfter(codexAgent("b"), "t1", failed()); // ended at 2000, before the switch
   r.clock.t = 2200;
-  await r.recovery.adopt("txn:late2", null, 2050);
+  await r.recovery.adopt("txn:late2", "acct-A", 2050);
   await r.recovery.run(port);
   assert.deepEqual(port.sends(), [`send:b:${continuationText}`]);
+});
+
+test("P9-2: an unknown switch target fails closed; the target must be the login that is current", async () => {
+  let r = make(), port = new Fake();
+  port.add("a");
+  await limit(r, "a");
+  r.clock.t += 1;
+  await r.recovery.adopt("event:1", null as never); // target unknown
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, []);
+  r = make({ account: { v: "acct-C" } }); port = new Fake(); port.add("a");
+  await limit(r, "a");
+  r.clock.t += 1;
+  await r.recovery.adopt("event:2", "acct-B"); // switched to B, but C is current at the idle boundary
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, []);
+});
+
+/** A store whose n-th save from now can be held, to reproduce the persistence races. */
+function heldStore() {
+  const s = {
+    saved: null as unknown,
+    saves: 0,
+    holdAt: -1,
+    waiter: null as (() => void) | null,
+    reached: null as (() => void) | null,
+    load: async () => s.saved,
+    save: async (v: unknown) => {
+      s.saves++;
+      s.saved = JSON.parse(JSON.stringify(v));
+      if (s.saves === s.holdAt) {
+        s.reached?.();
+        await new Promise<void>((r) => (s.waiter = r));
+      }
+    },
+    /** Hold the save that is `n` saves away; resolves once it is suspended. */
+    holdNext(n: number): Promise<void> {
+      s.holdAt = s.saves + n;
+      return new Promise((r) => (s.reached = r));
+    },
+    release() { s.holdAt = -1; s.waiter?.(); s.waiter = null; },
+  };
+  return s;
+}
+const settle = () => new Promise((x) => setTimeout(x, 5));
+
+test("P9-1: an archive or new activity while the consume save is pending prevents the reload", async () => {
+  for (const invalidate of [
+    (r: ReturnType<typeof make>) => r.recovery.archived("a"),
+    (r: ReturnType<typeof make>) => r.recovery.turnBefore(codexAgent("a"), "t2"),
+    (r: ReturnType<typeof make>) => r.recovery.turnAfter(codexAgent("a"), "t2", { kind: "canceled", reason: "user" }),
+  ]) {
+    const store = heldStore();
+    const r = make({ store }), port = new Fake();
+    port.add("a");
+    await limit(r, "a");
+    await adopt(r);
+    const suspended = store.holdNext(1); // the consume save
+    const running = r.recovery.run(port);
+    await suspended;
+    void invalidate(r);
+    await settle();
+    store.release();
+    await running;
+    assert.deepEqual(port.calls, []);
+  }
+});
+
+test("P9-1: new activity, an archive, a setting or login change while the lineage save is pending prevents the send", async () => {
+  for (const invalidate of [
+    (r: ReturnType<typeof make>) => r.recovery.turnBefore(codexAgent("a"), "t2"),
+    (r: ReturnType<typeof make>) => r.recovery.archived("a"),
+    (r: ReturnType<typeof make>) => void (r.resume.v = false),
+    (r: ReturnType<typeof make>) => void (r.account.v = "acct-C"),
+  ]) {
+    const store = heldStore();
+    const r = make({ store }), port = new Fake();
+    port.add("a");
+    await limit(r, "a");
+    await adopt(r);
+    const suspended = store.holdNext(2); // consume save, then the lineage save before the send
+    const running = r.recovery.run(port);
+    await suspended;
+    assert.deepEqual(port.calls, ["reload:a"]);
+    void invalidate(r);
+    await settle();
+    store.release();
+    await running;
+    assert.deepEqual(port.sends(), [], "no message after the invalidation");
+  }
+});
+
+test("P9-1: without any invalidation a held save only delays the single continuation", async () => {
+  const store = heldStore();
+  const r = make({ store }), port = new Fake();
+  port.add("a");
+  await limit(r, "a");
+  await adopt(r);
+  const suspended = store.holdNext(1);
+  const running = r.recovery.run(port);
+  await suspended;
+  await settle();
+  store.release();
+  await running;
+  assert.equal(port.sends().length, 1);
 });

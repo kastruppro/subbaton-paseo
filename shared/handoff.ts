@@ -49,6 +49,8 @@ export const handoffSchema = z.object({
   switchKey: z.string().max(600).nullable().default(null),
   /** Unix seconds of that switch (its event time), so limits that ended after it are not recovered. */
   switchedAt: z.number().finite().nullable().default(null),
+  /** The verified switch target (saved account UUID) from the switch event; adoption requires it. */
+  switchTarget: z.string().max(128).nullable().default(null),
 });
 export type Handoff = z.infer<typeof handoffSchema>;
 export const handoffStateSchema = z.object({

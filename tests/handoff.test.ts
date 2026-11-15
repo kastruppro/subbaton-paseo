@@ -41,7 +41,7 @@ class FakeCli implements HandoffCli {
   switches: { provider: string; target: string; options: SwitchOptions }[] = [];
   processes: AgyProcessInfo[] | null = [];
   outcome: SwitchOutcome = { kind: "switched", code: "switched", message: "Switched.", daemonOutcome: "not-requested" };
-  events_: { id?: string; transaction?: string; at: number; provider: string; kind: string }[] = [];
+  events_: { id?: string; transaction?: string; target?: string; at: number; provider: string; kind: string }[] = [];
   eventReads: (number | null)[] = [];
   gate: Promise<void> | null = null;
   plan: { ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false } = { ok: true, blockedOnlyByProcesses: false, target: null };
@@ -829,7 +829,7 @@ test("an automatic switch is adopted at the idle boundary, keyed by its switch e
     agents.agents = [agent("c1", "codex")];
     cli.daemonPending = true;
     cli.daemonOutcome = outcome;
-    cli.events_ = [{ id: "e1", transaction: "T9", at: 2000, provider: "codex", kind: "automaticSwitch" }];
+    cli.events_ = [{ id: "e1", transaction: "T9", target, at: 2000, provider: "codex", kind: "automaticSwitch" }];
     await coordinator.tick(agents);
     await coordinator.tick(agents);
     assert.deepEqual(adopted, expected.map((k) => [k, 2000]), `${restartCodexDaemon}/${outcome}`);
@@ -840,7 +840,7 @@ test("automatic switch events are watched for continuation even when reload and 
   const adopted: string[] = [];
   coordinator.onCodexAdopted = (key) => void adopted.push(key);
   agents.agents = [agent("c1", "codex")];
-  cli.events_ = [{ id: "e1", transaction: "T9", at: 2000, provider: "codex", kind: "automaticSwitch" }];
+  cli.events_ = [{ id: "e1", transaction: "T9", target, at: 2000, provider: "codex", kind: "automaticSwitch" }];
   await coordinator.tick(agents);
   await coordinator.tick(agents);
   assert.deepEqual(adopted, ["txn:T9"]);
@@ -848,7 +848,7 @@ test("automatic switch events are watched for continuation even when reload and 
 });
 test("with continuation off, switch events are not watched when reload and restart are off", async () => {
   const { cli, agents, coordinator } = setup({ restartCodexDaemon: false, reloadCodexAfterAutomaticSwitch: false, resumeLimitedCodexAgents: false });
-  cli.events_ = [{ id: "e1", transaction: "T9", at: 2000, provider: "codex", kind: "automaticSwitch" }];
+  cli.events_ = [{ id: "e1", transaction: "T9", target, at: 2000, provider: "codex", kind: "automaticSwitch" }];
   await coordinator.tick(agents);
   assert.deepEqual(cli.eventReads, []);
 });
@@ -862,4 +862,18 @@ test("a daemon restart that is merely pending from an unknown switch is not adop
   await coordinator.tick(agents);
   assert.equal(cli.daemonRestarts, 1);
   assert.deepEqual(adopted, []);
+});
+
+test("P9-2: the automatic switch event's target is carried to adoption; an unknown target is not adopted", async () => {
+  const B = "66666666-6666-4666-8666-666666666666";
+  for (const [eventTarget, expected] of [[B, [["txn:T9", B]]], [undefined, []]] as const) {
+    const { cli, agents, coordinator } = setup({ restartCodexDaemon: false });
+    const adopted: [string, string | null][] = [];
+    coordinator.onCodexAdopted = (key, account) => void adopted.push([key, account]);
+    agents.agents = [agent("c1", "codex")];
+    cli.events_ = [{ id: "e1", transaction: "T9", at: 2000, provider: "codex", kind: "automaticSwitch", ...(eventTarget ? { target: eventTarget } : {}) }];
+    await coordinator.tick(agents);
+    await coordinator.tick(agents);
+    assert.deepEqual(adopted, expected as never, String(eventTarget));
+  }
 });

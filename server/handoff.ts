@@ -60,7 +60,7 @@ export interface SwitchOptions {
 export interface HandoffCli {
   agyProcesses(): Promise<{ ok: true; processes: AgyProcessInfo[] } | { ok: false }>;
   switchAccount(provider: HandoffProvider, target: string, options: SwitchOptions): Promise<SwitchOutcome>;
-  events(since: number | null): Promise<{ ok: true; events: { id?: string; transaction?: string; at: number; provider: string; kind: string }[] } | { ok: false }>;
+  events(since: number | null): Promise<{ ok: true; events: { id?: string; transaction?: string; target?: string; at: number; provider: string; kind: string }[] } | { ok: false }>;
   knownAccount(provider: HandoffProvider, target: string): { alias: string } | null;
   /** agy auto plan: whether running agy processes are the only blocker of an automatic switch. */
   agyAutoPlan(): Promise<{ ok: true; blockedOnlyByProcesses: boolean; target: string | null } | { ok: false }>;
@@ -148,7 +148,7 @@ export class HandoffCoordinator {
   private running = false;
   agentApiSeen = false;
   /** Called once per verified Codex switch with a known identity (account = switch target, when known). */
-  onCodexAdopted: ((switchKey: string, account: string | null, switchedAt: number | null) => void) | null = null;
+  onCodexAdopted: ((switchKey: string, account: string, switchedAt: number | null) => void) | null = null;
   private paseoAnchor: number | null;
   private listTimeoutMs: number;
   private reloadTimeoutMs: number;
@@ -298,6 +298,7 @@ export class HandoffCoordinator {
         daemonOutcome: null,
         switchKey: null,
         switchedAt: null,
+        switchTarget: null,
       };
       this.state.handoffs[provider] = handoff;
       await this.persist();
@@ -385,7 +386,7 @@ export class HandoffCoordinator {
   }
 
   /** A reload-only Codex handoff after a verified switch; optionally restarts the shared daemon. */
-  private automaticCodex(settings: HandoffSettings, code: string, message: string, switchKey: string | null = null, switchedAt: number | null = null): Handoff {
+  private automaticCodex(settings: HandoffSettings, code: string, message: string, switchKey: string | null = null, switchedAt: number | null = null, switchTarget: string | null = null): Handoff {
     const now = this.now();
     return {
       id: this.newId(),
@@ -407,6 +408,7 @@ export class HandoffCoordinator {
       daemonOutcome: null,
       switchKey,
       switchedAt,
+      switchTarget,
     };
   }
   private switchKey(key: string) {
@@ -440,6 +442,7 @@ export class HandoffCoordinator {
               return this.switchKey(last.transaction ? "txn:" + last.transaction : "event:" + (last.id ?? `${last.at}:${last.kind}`));
             })(),
             unseen[unseen.length - 1]!.at,
+            unseen[unseen.length - 1]!.target ?? null,
           );
         }
         await this.persist();
@@ -485,6 +488,7 @@ export class HandoffCoordinator {
       daemonOutcome: null,
       switchKey: null,
       switchedAt: null,
+      switchTarget: null,
     };
     await this.persist();
   }
@@ -554,7 +558,7 @@ export class HandoffCoordinator {
       });
       // Adoption: a verified switch. The plugin's own reload of a limited agent adopts the new login;
       // a successful daemon restart is not required (and is never enabled for this).
-      if (h.switchKey) this.onCodexAdopted?.(h.switchKey, null, h.switchedAt);
+      if (h.switchKey && h.switchTarget) this.onCodexAdopted?.(h.switchKey, h.switchTarget, h.switchedAt);
       return;
     }
     const options: SwitchOptions = {};

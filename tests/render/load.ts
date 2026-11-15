@@ -6,7 +6,7 @@ export async function loadRenderer(): Promise<(doc: unknown, extra?: { status?: 
   return (await bundle("tests/render/page.tsx")).renderPage as never;
 }
 /** The shared account detail block of the popover, rendered to static markup. */
-export async function loadDetailRenderer(): Promise<(provider: string, account: unknown, opts?: { warning?: number; danger?: number; offline?: boolean }) => string> {
+export async function loadDetailRenderer(): Promise<(provider: string, account: unknown, opts?: { warning?: number; danger?: number; offline?: boolean; legend?: boolean }) => string> {
   return (await bundle("tests/render/detail.tsx")).renderDetail as never;
 }
 async function bundle(entry: string): Promise<Record<string, unknown>> {

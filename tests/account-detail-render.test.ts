@@ -21,6 +21,11 @@ test("the shared detail block renders identity, every window with its marking, r
   assert.match(html, /estimated|presumed|inferred/i, "an estimated reading is marked");
   assert.match(html, /pace/i, "the pace legend");
 });
+test("O-L4: the pace legend can be left out so it shows once per provider", async () => {
+  const render = await loadDetailRenderer();
+  assert.match(render("codex", account()), /pace/i);
+  assert.doesNotMatch(render("codex", account(), { legend: false }), /pace: where usage/i);
+});
 test("the detail block shows the health state and an unknown-usage note when there are no windows", async () => {
   const render = await loadDetailRenderer();
   const html = render("agy", account({ windows: [], health: "quarantined", usageStatus: "needs-renewal", resetCreditsAvailable: undefined }));

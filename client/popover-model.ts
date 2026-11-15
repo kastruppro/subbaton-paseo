@@ -250,7 +250,16 @@ export function geminiNotice(provider: Provider, account: Account): { text: stri
 }
 
 /** How the login of an account ends; the wording is shared by the active account and every other account. */
-export function loginText(provider: Provider, account: Account): string {
+export function loginText(provider: Provider, account: Account, now = Date.now() / 1000): string {
+  // An inactive agy login is renewed only by the explicit renewal or a switch: say where it stands.
+  if (provider === "agy" && !account.active) {
+    if (account.usageStatus === "needs-renewal" || account.usageStatus === "needsRenewal") return "needs renewal";
+    if (account.loginExpiresAt != null)
+      return account.loginExpiresAt <= now
+        ? "needs renewal"
+        : `access token valid until ${new Date(account.loginExpiresAt * 1000).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`;
+    return "renewed on switch or with Renew";
+  }
   return account.loginExpiresAt != null
     ? `login valid until ${new Date(account.loginExpiresAt * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`
     : provider === "codex"
@@ -286,7 +295,7 @@ export function accountDetail(
     gemini: geminiNotice(provider, account)?.text ?? null,
     warning: shortWarning(provider, account.summaryStatus, account.warnings),
     readAt: lastRead(account),
-    loginText: loginText(provider, account),
+    loginText: loginText(provider, account, now),
     attention: attentionLine(account, now)?.text ?? null,
     paid: paidUsageLines(provider, account, now),
   };

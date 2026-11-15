@@ -306,6 +306,15 @@ test("account detail: no windows says usage is unknown; unknown identity is spel
   const b = accountDetail("codex", inactive(), { warning: 80, danger: 100, offline: false, now: NOW });
   assert.deepEqual({ ...a, badge: undefined }, { ...b, badge: undefined });
 });
+test("O-L3: an inactive agy account shows its own login state, not 'login renewed by agy'", () => {
+  const o = { warning: 80, danger: 100, offline: false, now: NOW };
+  assert.equal(accountDetail("agy", inactive({ active: true }), o).loginText, "login renewed by agy");
+  assert.equal(accountDetail("agy", inactive({ usageStatus: "needs-renewal" }), o).loginText, "needs renewal");
+  assert.match(accountDetail("agy", inactive({ loginExpiresAt: NOW + 3600 }), o).loginText, /^access token valid until /);
+  assert.equal(accountDetail("agy", inactive({ loginExpiresAt: NOW - 60 }), o).loginText, "needs renewal", "an expired access token needs renewal");
+  assert.equal(accountDetail("agy", inactive(), o).loginText, "renewed on switch or with Renew");
+  assert.equal(accountDetail("codex", inactive(), o).loginText, "login has no fixed end date", "other providers are unchanged");
+});
 test("several other accounts can be open at once and the open state survives a status refresh", () => {
   let open: string[] = [];
   open = toggleOpenAccount(open, "a");

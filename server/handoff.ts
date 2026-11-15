@@ -148,6 +148,8 @@ export class HandoffCoordinator {
   private running = false;
   agentApiSeen = false;
   /** Called once per verified Codex switch with a known identity (account = switch target, when known). */
+  /** True for an agent the limited-agent recovery reloads itself this switch: the reopen leaves it alone (one reload per agent). */
+  skipReopen: ((agentId: string) => boolean) | null = null;
   onCodexAdopted: ((switchKey: string, account: string, switchedAt: number | null) => void) | null = null;
   private paseoAnchor: number | null;
   private listTimeoutMs: number;
@@ -703,6 +705,11 @@ export class HandoffCoordinator {
     let waiting = 0;
     for (const id of h.affected) {
       if (h.reopened.includes(id) || h.failedReopen.includes(id)) continue;
+      if (h.provider === "codex" && this.skipReopen?.(id)) {
+        // Recovery reloads this limited agent once and continues it; a second reload could interrupt that turn.
+        h.reopened.push(id);
+        continue;
+      }
       // Review M1: read this agent's state immediately before its reload; earlier reloads take time.
       const snap = (await agents.list()).find((a) => a.id === id);
       if (!snap) {

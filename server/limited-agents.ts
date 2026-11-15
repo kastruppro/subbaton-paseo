@@ -36,7 +36,8 @@ const shortKey = (key: string) => (key.length > 40 ? key.slice(0, 40) + "…" : 
 export function paidEligible(paid: PaidUsage | undefined, now: number): boolean {
   if (!paid || paid.stale || !Number.isFinite(paid.fetchedAt) || now < paid.fetchedAt || now - paid.fetchedAt >= 180) return false;
   if (paid.kind === "credits") {
-    const amount = paid.balance !== undefined && /^[0-9]+(?:\.[0-9]+)?$/.test(paid.balance) ? Number(paid.balance) : undefined;
+    // Signed, optionally with an exponent (a number balance reaches us as String(n)); <= 0 is never eligible.
+    const amount = paid.balance !== undefined && /^[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/.test(paid.balance.trim()) ? Number(paid.balance) : undefined;
     if (paid.hasCredits === false || (amount !== undefined && amount <= 0)) return false;
     return paid.unlimited === true || (paid.hasCredits === true && amount !== undefined && amount > 0);
   }
@@ -46,16 +47,31 @@ export function paidEligible(paid: PaidUsage | undefined, now: number): boolean 
   if (paid.monthlyLimit !== undefined && paid.usedCredits !== undefined && paid.usedCredits >= paid.monthlyLimit) return false;
   return true;
 }
-/**
- * Core rule (PolicyEngine): exhausted = every window fresh and one at 100 or more. "unknown" when there are no
- * windows or none at 100 while some reading is stale or missing.
- */
-export function targetUsage(account: Account, now: number): "exhausted" | "usable" | "unknown" {
-  const fresh = (w: Account["windows"][number]) => !w.stale && w.usedPercent !== null && !(w.resetsAt !== null && w.resetsAt <= now);
-  if (account.windows.length === 0) return "unknown";
-  if (account.windows.every(fresh) && account.windows.some((w) => (w.usedPercent ?? 0) >= 100)) return paidEligible(account.paidUsage, now) ? "usable" : "exhausted";
-  return account.windows.every(fresh) ? "usable" : "unknown";
+/** Windows the core always requires on a Codex account (PolicyEngine adds the missing ones as unknown). */
+const requiredWindows = ["five_hour", "seven_day"];
+export interface TargetUsage {
+  verdict: "exhausted" | "usable" | "unknown";
+  /** Oldest reading behind the verdict (windows, and the paid fallback when it was needed); null when unknown. */
+  readAt: number | null;
 }
+/**
+ * Core rule (PolicyEngine): every window fresh (not stale, not inferred, not past its reset, both required
+ * windows present) and one at 100 or more = exhausted, unless the paid fallback is usable. All fresh and none
+ * at 100 = usable (headroom). Anything else is unknown.
+ */
+export function targetUsage(account: Account, now: number): TargetUsage {
+  const unknown: TargetUsage = { verdict: "unknown", readAt: null };
+  const fresh = (w: Account["windows"][number]) => !w.stale && !w.inferred && w.usedPercent !== null && w.fetchedAt !== null && !(w.resetsAt !== null && w.resetsAt <= now);
+  if (!requiredWindows.every((id) => account.windows.some((w) => w.id === id)) || !account.windows.every(fresh)) return unknown;
+  const readAt = Math.min(...account.windows.map((w) => w.fetchedAt as number));
+  if (!account.windows.some((w) => (w.usedPercent ?? 0) >= 100)) return { verdict: "usable", readAt };
+  return paidEligible(account.paidUsage, now)
+    ? { verdict: "usable", readAt: Math.min(readAt, account.paidUsage!.fetchedAt) }
+    : { verdict: "exhausted", readAt };
+}
+
+/** A waiting candidate older than this is dropped (a "Continue" message after days would surprise the owner). */
+export const waitingMaxAgeSeconds = 7 * 86400;
 
 export interface HookAgent {
   id: string;
@@ -84,6 +100,8 @@ const emptyState = (): RecoveryState => ({ schemaVersion: 1, consumed: [], suppr
 interface Candidate {
   turnId: string;
   at: number;
+  /** Parked for a later switch or until the target has headroom. */
+  waiting?: boolean;
 }
 interface Pending {
   key: string;
@@ -104,8 +122,10 @@ export class LimitedAgentRecovery {
   /** run() and adopt() queue here. Hooks never wait for it: they must invalidate a candidate mid-run. */
   private chain: Promise<unknown> = Promise.resolve();
   private writes: Promise<unknown> = Promise.resolve();
-  /** Pending agent/switch/turn combinations whose "waiting" line was already logged. */
+  /** "Waiting" lines already logged, keyed `<agent>\0<tag>` (agent "" for per-switch lines). */
   private waitLogged = new Set<string>();
+  /** Agents recovery reloaded or is about to continue under the current switch (the handoff must not reload them again). */
+  private touched = new Set<string>();
 
   constructor(
     private store: RecoveryStore,
@@ -164,7 +184,21 @@ export class LimitedAgentRecovery {
     return next;
   }
 
+  private logOnce(agentId: string, tag: string, message: string) {
+    const key = `${agentId}\0${tag}`;
+    if (this.waitLogged.has(key)) return;
+    this.waitLogged.add(key);
+    this.say(message);
+  }
+  private clearLogged(agentId: string) {
+    for (const key of [...this.waitLogged]) if (key.startsWith(`${agentId}\0`)) this.waitLogged.delete(key);
+  }
+  /** True while recovery owns this agent's reload for the current switch: a candidate, or one it already reloaded. */
+  handles(agentId: string): boolean {
+    return this.candidates.has(agentId) || this.touched.has(agentId);
+  }
   private forget(agentId: string, reason?: string) {
+    this.clearLogged(agentId);
     if (this.candidates.delete(agentId) && reason) this.say(`candidate dropped agent=${short(agentId)} reason=${reason}`);
   }
   private lineageOf(agentId: string) {
@@ -250,6 +284,8 @@ export class LimitedAgentRecovery {
       if (expectedAccount !== current) return refuse(`target ${expectedAccount} is not the active login ${current}`);
       // The same switch adopted again keeps its original time, so candidates waiting for the next switch stay waiting.
       if (this.pending?.key === key && this.pending.accountId === current) return;
+      this.clearLogged("");
+      this.touched.clear();
       this.pending = { key, accountId: current, since: Math.min(this.now(), switchedAt ?? Infinity) };
       this.say(`switch adopted key=${shortKey(key)} account=${current} candidates=${this.candidates.size}`);
     });
@@ -299,49 +335,45 @@ export class LimitedAgentRecovery {
     const who = short(agentId);
     const drop = (reason?: string) => {
       if (this.candidates.get(agentId) === candidate) this.candidates.delete(agentId);
+      this.clearLogged(agentId);
       if (reason) this.say(`skipped agent=${who} reason=${reason}`);
     };
-    if (candidate.at >= pending.since) {
-      // The limit hit the current (already switched) login: keep it for the NEXT adopted switch.
-      const waitId = `next|${agentId}|${candidate.turnId}`;
-      if (!this.waitLogged.has(waitId)) {
-        this.waitLogged.add(waitId);
-        this.say(`waiting for the next switch agent=${who}`);
-      }
-      return;
-    }
     const id = `${pending.key}|${agentId}|${candidate.turnId}`;
+    if (candidate.waiting && this.now() - candidate.at > waitingMaxAgeSeconds) return drop("waited longer than 7 days");
     if (this.state.consumed.includes(id)) return drop("already consumed for this switch");
+    const park = (message: string, tag: string) => {
+      candidate.waiting = true;
+      this.logOnce(agentId, tag, message);
+    };
+    // The target's cached status (windows and paid usage); no check configured means no evidence.
+    let usage: TargetUsage | null = null;
     if (this.accountUsage) {
       const account = await withTimeout(this.accountUsage(pending.accountId), this.timeoutMs).catch(() => null);
-      const verdict = account ? targetUsage(account, this.now()) : "unknown";
-      if (verdict === "exhausted") {
-        // The target would hit the limit again and suppress the agent: keep it for the next switch.
-        const waitId = `exhausted|${id}`;
-        if (!this.waitLogged.has(waitId)) {
-          this.waitLogged.add(waitId);
-          this.say(`waiting for the next switch agent=${who} reason=target exhausted`);
-        }
-        return;
-      }
-      if (verdict === "unknown") {
-        const unknownId = `unknown|${pending.key}`;
-        if (!this.waitLogged.has(unknownId)) {
-          this.waitLogged.add(unknownId);
-          this.say(`target usage unreadable, stale or unknown, continuing anyway account=${pending.accountId} key=${shortKey(pending.key)}`);
-        }
-      }
+      usage = account ? targetUsage(account, this.now()) : { verdict: "unknown", readAt: null };
     }
+    if (candidate.at >= pending.since) {
+      // The limit may have hit either login (an agent still on the old login hits the old limit after an automatic
+      // switch). Continue only on a usable reading of the target fetched after the limit ended: it proves the
+      // agent did not hit the target's subscription limit, or that credits now cover it.
+      if (!(usage?.verdict === "usable" && usage.readAt !== null && usage.readAt > candidate.at))
+        return park(`waiting for the next switch agent=${who}`, `next|${id}`);
+    }
+    if (usage?.verdict === "exhausted") {
+      // The target would hit the limit again and suppress the agent.
+      return park(`waiting until the target has headroom or the next switch agent=${who} reason=target exhausted`, `exhausted|${id}`);
+    }
+    if (usage?.verdict === "unknown")
+      this.logOnce("", `unknown|${pending.key}`, `target usage unreadable, stale or unknown, continuing anyway account=${pending.accountId} key=${shortKey(pending.key)}`);
+    candidate.waiting = false;
+    this.waitLogged.delete(`${agentId}\0next|${id}`);
+    this.waitLogged.delete(`${agentId}\0exhausted|${id}`);
     const first = await this.eligible(port, pending, agentId, candidate, false);
     if (first.state === "wait") {
       // Runs fire on every finished turn host-wide; log the wait once, again only after it resolved.
-      if (!this.waitLogged.has(id)) {
-        this.waitLogged.add(id);
-        this.say(`waiting agent=${who} reason=turn running`);
-      }
+      this.logOnce(agentId, `busy|${id}`, `waiting agent=${who} reason=turn running`);
       return;
     }
-    this.waitLogged.delete(id);
+    this.clearLogged(agentId);
     if (first.state === "drop") return drop(first.reason);
     this.say(`login recheck before reload ok account=${pending.accountId} agent=${who}`);
     // Every side effect is preceded by a fresh eligibility check made after the previous persistence
@@ -350,6 +382,7 @@ export class LimitedAgentRecovery {
     this.say(`attempt persisted agent=${who} turn=${short(candidate.turnId)} key=${shortKey(pending.key)}`);
     const beforeReload = await this.eligible(port, pending, agentId, candidate, false).catch(() => ({ state: "drop" as const, reason: "check failed" }));
     if (beforeReload.state !== "ok" || !this.same(pending, agentId, candidate)) return drop(beforeReload.state === "drop" ? `${beforeReload.reason} (after persisting)` : "changed after persisting");
+    this.touched.add(agentId);
     this.say(`reload started agent=${who}`);
     try {
       await withTimeout(port.reload(agentId), this.timeoutMs);

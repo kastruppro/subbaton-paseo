@@ -4,6 +4,7 @@ import {
   LimitedAgentRecovery,
   continuationText,
   isLimitFailure,
+  paidEligible,
   type RecoveryStore,
 } from "../server/limited-agents.js";
 import type { AgentPort, AgentSnapshot } from "../server/handoff.js";
@@ -752,7 +753,8 @@ test("LL-2: realistic UUID agent ids appear in the log only as the 8-character s
 });
 
 // Switch target usability (the core's eligibility rule: all windows fresh and one at 100 = exhausted; paid fallback must be fresh and funded).
-const win = (usedPercent: number | null, patch: Record<string, unknown> = {}) => ({ id: "five_hour", label: "5h", usedPercent, resetsAt: 5000, stale: false, inferred: false, fetchedAt: 990, ...patch });
+const win = (usedPercent: number | null, patch: Record<string, unknown> = {}, id = "five_hour") => ({ id, label: id, usedPercent, resetsAt: 5000, stale: false, inferred: false, fetchedAt: 990, ...patch });
+const pair = (five: number | null, seven: number | null = 10, patch: Record<string, unknown> = {}) => [win(five, patch), win(seven, patch, "seven_day")];
 const credits = (patch: Record<string, unknown> = {}) => ({ kind: "credits", fetchedAt: 990, stale: false, hasCredits: true, balance: "12.5", ...patch });
 const target = (windows: unknown[], paidUsage?: unknown) => ({ id: "acct-A", windows, paidUsage });
 async function exhaustedRun(usage: Usage) {
@@ -764,27 +766,41 @@ async function exhaustedRun(usage: Usage) {
   await r.recovery.run(port);
   return { r, port };
 }
-test("target exhausted with no usable paid fallback: the candidate waits for the next switch, logged once", async () => {
-  for (const paid of [undefined, credits({ hasCredits: false }), credits({ balance: "0" }), credits({ stale: true }), credits({ fetchedAt: 700 })]) {
-    const usage = { v: target([win(100)], paid) };
+test("target exhausted with no usable paid fallback: the candidate waits until headroom or the next switch, logged once", async () => {
+  for (const paid of [undefined, credits({ hasCredits: false }), credits({ balance: "0" }), credits({ balance: "-5", unlimited: true }), credits({ stale: true }), credits({ fetchedAt: 700 })]) {
+    const usage = { v: target(pair(100), paid) };
     const { r, port } = await exhaustedRun(usage);
     assert.deepEqual(port.calls, [], JSON.stringify(paid));
-    assert.equal(r.logs.filter((l) => /waiting for the next switch agent=a reason=target exhausted/.test(l)).length, 1);
-    // the next switch to a usable account continues it once
-    usage.v = target([win(10)]);
+    assert.equal(r.logs.filter((l) => /waiting until the target has headroom or the next switch agent=a reason=target exhausted/.test(l)).length, 1);
+    usage.v = target(pair(10));
     await adopt(r, "txn:2");
     await r.recovery.run(port);
     assert.equal(port.sends().length, 1);
   }
 });
 test("target exhausted but with usable credits (unlimited or a positive balance): continues as normal", async () => {
-  for (const paid of [credits(), credits({ hasCredits: undefined, unlimited: true, balance: undefined })]) {
-    const { port } = await exhaustedRun({ v: target([win(100)], paid) });
+  for (const paid of [credits(), credits({ hasCredits: undefined, unlimited: true, balance: undefined }), credits({ balance: "1e-7" })]) {
+    const { port } = await exhaustedRun({ v: target(pair(100), paid) });
     assert.deepEqual(port.sends(), [`send:a:${continuationText}`]);
   }
 });
+test("an exhausted target that regains headroom continues in the same switch", async () => {
+  const usage = { v: target(pair(100)) };
+  const { r, port } = await exhaustedRun(usage);
+  assert.deepEqual(port.calls, []);
+  usage.v = target(pair(20));
+  await r.recovery.run(port);
+  assert.equal(port.sends().length, 1);
+});
 test("target status unreadable, stale or unknown: continues as today and logs the uncertainty once", async () => {
-  for (const v of [null, target([]), target([win(100, { stale: true })]), target([win(null)]), target([win(100), win(30, { stale: true })])]) {
+  const vectors = [
+    null, target([]), target(pair(100, 10, { stale: true })), target(pair(null)),
+    target([win(100), win(30, { stale: true }, "seven_day")]),
+    target([win(100, {}, "seven_day")]), // 5h row missing: the core says unknown, not exhausted
+    target(pair(100, 100, { inferred: true })),
+    target(pair(100, 100, { resetsAt: 900 })),
+  ];
+  for (const v of vectors) {
     const { r, port } = await exhaustedRun({ v });
     assert.equal(port.sends().length, 1, JSON.stringify(v));
     assert.equal(r.logs.filter((l) => /target usage unreadable, stale or unknown/.test(l)).length, 1);
@@ -792,7 +808,106 @@ test("target status unreadable, stale or unknown: continues as today and logs th
   }
 });
 test("target with headroom continues without any uncertainty line", async () => {
-  const { r, port } = await exhaustedRun({ v: target([win(40), win(99)]) });
+  const { r, port } = await exhaustedRun({ v: target(pair(40, 99)) });
   assert.equal(port.sends().length, 1);
   assert.ok(!has(r, /unreadable|exhausted/));
+});
+
+test("paidEligible mirrors the core (PaidUsage.swift) on signed balances, exponents and freshness", () => {
+  const now = 1000;
+  const vectors: [Record<string, unknown>, boolean][] = [
+    [credits(), true],
+    [credits({ balance: "-5" }), false],
+    [credits({ balance: "-5", unlimited: true }), false],
+    [credits({ balance: "1e-7" }), true],
+    [credits({ balance: "0" }), false],
+    [credits({ hasCredits: false, unlimited: true }), false],
+    [credits({ hasCredits: true, balance: undefined }), false],
+    [credits({ hasCredits: undefined, unlimited: true, balance: undefined }), true],
+    [credits({ stale: true }), false],
+    [credits({ fetchedAt: 820 }), false],
+    [credits({ fetchedAt: 821 }), true],
+    [credits({ fetchedAt: 1001 }), false],
+    [{ kind: "extraUsage", fetchedAt: 990, stale: false, enabled: true }, true],
+    [{ kind: "extraUsage", fetchedAt: 990, stale: false, enabled: false }, false],
+    [{ kind: "extraUsage", fetchedAt: 990, stale: false, enabled: true, utilization: 100 }, false],
+    [{ kind: "extraUsage", fetchedAt: 990, stale: false, enabled: true, monthlyLimit: 0 }, false],
+    [{ kind: "extraUsage", fetchedAt: 990, stale: false, enabled: true, monthlyLimit: 50, usedCredits: 50 }, false],
+  ];
+  for (const [paid, expected] of vectors) assert.equal(paidEligible(paid as never, now), expected, JSON.stringify(paid));
+  assert.equal(paidEligible(undefined, now), false);
+});
+
+// A limit that ended after the switch: the limit may have hit either login. Only a fresh target reading fetched after it counts as proof.
+async function afterSwitch(usage: Usage) {
+  const r = make({ usage }), port = new Fake();
+  port.add("a");
+  await adopt(r, "txn:1");
+  r.clock.t += 5; // 1006
+  await r.recovery.turnBefore(codexAgent("a"), "t1");
+  await r.recovery.turnAfter(codexAgent("a"), "t1", failed()); // ended at 1006
+  r.clock.t += 5; // now 1011
+  await r.recovery.run(port);
+  return { r, port };
+}
+test("M1: a limit after the switch continues when the target has a fresh usable reading fetched after it", async () => {
+  const usage = { v: target(pair(30, 10, { fetchedAt: 1005 })) };
+  const { r, port } = await afterSwitch(usage);
+  assert.deepEqual(port.calls, [], "a reading from before the limit proves nothing");
+  assert.equal(r.logs.filter((l) => /waiting for the next switch agent=a/.test(l)).length, 1);
+  usage.v = target(pair(30, 10, { fetchedAt: 1007 }));
+  await r.recovery.run(port);
+  assert.equal(port.sends().length, 1);
+});
+test("M1: a limit after the switch keeps waiting when the target is exhausted, unknown or has no status", async () => {
+  for (const v of [target(pair(100, 10, { fetchedAt: 1007 })), target(pair(30, 10, { fetchedAt: 1007, stale: true })), null]) {
+    const { port } = await afterSwitch({ v });
+    assert.deepEqual(port.calls, [], JSON.stringify(v));
+  }
+  const { port } = await afterSwitch({ v: target(pair(100, 10, { fetchedAt: 1007 }), credits({ fetchedAt: 1007 })) });
+  assert.equal(port.sends().length, 1, "credits fetched after the limit cover an exhausted target");
+});
+
+test("L4: waiting candidates expire after 7 days; log entries are cleared with the candidate", async () => {
+  const r = make(), port = new Fake();
+  port.add("a");
+  await adopt(r, "txn:1");
+  await limit(r, "a");
+  await r.recovery.run(port);
+  assert.ok(has(r, /waiting for the next switch agent=a/));
+  r.clock.t += 7 * 86400 + 100;
+  await r.recovery.run(port);
+  assert.ok(has(r, /skipped agent=a reason=waited longer than 7 days/));
+  r.account.v = "acct-B";
+  await adopt(r, "txn:2");
+  await r.recovery.run(port);
+  assert.deepEqual(port.calls, []);
+  // a new limit after the same agent was dropped logs its wait line again
+  await r.recovery.turnBefore(codexAgent("a"), "t9");
+  await r.recovery.turnAfter(codexAgent("a"), "t9", failed());
+  await r.recovery.run(port);
+  assert.equal(r.logs.filter((l) => /waiting for the next switch agent=a/.test(l)).length, 2);
+});
+
+test("M2: agents recovery handles are skipped by the handoff reopen; one reload per agent per switch", async () => {
+  const r = make(), port = new Fake();
+  port.add("a"); port.add("b");
+  await limit(r, "a");
+  await adopt(r, "txn:1");
+  assert.equal(r.recovery.handles("a"), true);
+  assert.equal(r.recovery.handles("b"), false);
+  // interleaving: the handoff reopens every agent unless recovery handles it, while recovery runs
+  const reopened: string[] = [];
+  const reopen = async () => {
+    for (const id of ["a", "b"]) {
+      if (r.recovery.handles(id)) continue;
+      await port.reload(id);
+      reopened.push(id);
+    }
+  };
+  await Promise.all([r.recovery.run(port), reopen()]);
+  await reopen(); // a later tick, after recovery sent: "a" is still not reloaded again
+  assert.equal(port.calls.filter((c) => c === "reload:a").length, 1);
+  assert.equal(port.calls.filter((c) => c === "reload:b").length, 2 /* the fake handoff reloads b on each of its two passes */);
+  assert.equal(port.sends().length, 1);
 });

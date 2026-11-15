@@ -54,6 +54,7 @@ export function registerHandoff(
       .adopt(key, account, switchedAt)
       .then(() => recovery.run(latest))
       .catch(() => undefined);
+  coordinator.skipReopen = (id) => recovery.handles(id);
   const nudge = (port: AgentPort | null = latest) => void coordinator.tick(port).catch(() => undefined);
 
   server.handle(handoffStatusRpc, (_input, context) => {

@@ -93,6 +93,8 @@ export function accountBadge(
         : { text: paid === "credits" ? "Exhausted, credits left" : "Exhausted, extra usage on", tone: "warning" };
     return { text: "Exhausted", tone: "danger" };
   }
+  // Codex refused this login with a usage limit although no measured window shows it yet.
+  if (account.limitObservedAt != null) return { text: "Usage limit hit", tone: "danger" };
   if (account.active) return { text: "Active", tone: "normal" };
   if (worst >= warning && severity(worst, false, warning, danger) !== "normal")
     return { text: "Near limit", tone: "warning" };
@@ -105,6 +107,8 @@ export function rowGlyph(
   now = Date.now() / 1000,
 ): "ok" | "warn" | "crit" | "mute" {
   if (!account) return "mute";
+  // An observed usage limit is critical (the glyph never downgrades it to a paid-usage warning).
+  if (account.limitObservedAt != null) return "crit";
   let tone = accountTone(account, warning, danger);
   // An exhausted account that keeps working on paid usage is a warning; blocked health stays critical.
   if (tone === "danger" && !["needsLogin", "quarantined", "deviceBlocked"].includes(account.health) && paidCarriesOn(account, now)) tone = "warning";

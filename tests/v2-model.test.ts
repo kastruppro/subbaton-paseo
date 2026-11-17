@@ -405,8 +405,23 @@ test("badge: an account with limitObservedAt never says Using credits; Codex sai
   assert.equal(rowGlyph(acct({ windows: exhausted, paidUsage: credits(), limitObservedAt: 990 }), 80, 100, 1_000), "crit");
   assert.equal(paidCarriesOn({ paidUsage: credits() as never, limitObservedAt: 990 }, 1_000), null);
   assert.equal(badgeOf({ active: true, paidUsage: credits() })?.text, "Using credits", "without the marker nothing changes");
-  // below 100 % the marker alone does not invent an Exhausted badge (the core treats the account as exhausted itself)
-  assert.equal(accountBadge(acct({ windows: [win("five_hour", { usedPercent: 40 })], limitObservedAt: 990 }), 80, 100, 1_000)?.text, "Active");
+});
+test("badge: an observed usage limit with no window at 100 % says Usage limit hit (danger), below the health states and above Active / Near limit", () => {
+  const low = [win("five_hour", { usedPercent: 40 })];
+  const b = (patch: Partial<Account>) => accountBadge(acct({ windows: low, limitObservedAt: 990, ...patch }), 80, 100, 1_000);
+  assert.deepEqual(b({ active: true }), { text: "Usage limit hit", tone: "danger" });
+  assert.deepEqual(b({ active: false }), { text: "Usage limit hit", tone: "danger" });
+  assert.deepEqual(b({ active: true, paidUsage: credits() }), { text: "Usage limit hit", tone: "danger" }, "paid usage did not carry on");
+  assert.equal(b({ windows: [win("five_hour", { usedPercent: 90, resetsAt: null })] })?.text, "Usage limit hit", "above Near limit");
+  assert.equal(b({ health: "needsLogin" })?.text, "Needs login");
+  assert.equal(b({ health: "quarantined" })?.text, "Quarantined");
+  assert.equal(b({ enabled: false })?.text, "Disabled");
+  assert.equal(b({ health: "attention" })?.text, "Login check failed");
+  assert.equal(b({ usageStatus: "needs-renewal" })?.text, "Needs renewal");
+  assert.equal(b({ windows: exhausted })?.text, "Exhausted", "a window at 100 % keeps Exhausted");
+  assert.equal(rowGlyph(acct({ windows: low, limitObservedAt: 990 }), 80, 100, 1_000), "crit");
+  assert.equal(rowGlyph(acct({ windows: low }), 80, 100, 1_000), "ok");
+  assert.equal(accountBadge(acct({ windows: low }), 80, 100, 1_000)?.text, "Active", "without the marker nothing changes");
 });
 test("status parsing: limitObservedAt is optional and malformed values are ignored", () => {
   const base = structuredClone(status) as any;

@@ -432,3 +432,20 @@ test("status parsing: limitObservedAt is optional and malformed values are ignor
   account.limitObservedAt = "yesterday";
   assert.equal(statusSchema.parse(base).providers[0]!.accounts[0]!.limitObservedAt, undefined);
 });
+
+test("footer: an observed usage limit makes the cell danger and the spoken text says so", () => {
+  const low = [win("five_hour", { usedPercent: 40 }), win("seven_day", { usedPercent: 10 })];
+  const opts = { warning: 80, danger: 100, offline: false, narrow: false, now: 1_000 };
+  const account = acct({ windows: low, limitObservedAt: 990 });
+  const cell = footerCell({ provider: "codex", windowId: "five_hour", window: low[0]!, account }, opts);
+  assert.equal(cell.tone, "danger");
+  assert.equal(cell.textTone, "danger");
+  assert.equal(cell.percent, "40%", "the measured percentage is kept");
+  assert.match(footerSpeech("codex", cell), /40 percent used.*usage limit hit/);
+  const plain = footerCell({ provider: "codex", windowId: "five_hour", window: low[0]!, account: acct({ windows: low }) }, opts);
+  assert.notEqual(plain.tone, "danger");
+  assert.doesNotMatch(footerSpeech("codex", plain), /usage limit hit/);
+  const full = footerCell({ provider: "codex", windowId: "seven_day", window: win("seven_day", { usedPercent: 100, resetsAt: 4_000_000_000 }), account: acct({ windows: exhausted, limitObservedAt: 990, paidUsage: credits() }) }, opts);
+  assert.match(footerSpeech("codex", full), /exhausted, usage limit hit/);
+  assert.doesNotMatch(footerSpeech("codex", full), /running on credits/);
+});

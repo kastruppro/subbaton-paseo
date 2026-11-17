@@ -87,7 +87,7 @@ export function registerHandoff(
     nudge(port);
     return response;
   });
-  type HookEvent = { agent?: { id: string; provider: string; workspaceId?: string | null }; turnId?: string | null; outcome?: TurnOutcome };
+  type HookEvent = { agent?: { id: string; provider: string; workspaceId?: string | null; createdAt?: string | null }; turnId?: string | null; outcome?: TurnOutcome };
   const removeBefore = server.addHook("agent.turn.before", async (event, context) => {
     capture(context);
     const e = event as HookEvent;

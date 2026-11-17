@@ -490,13 +490,13 @@ export class SubBatonService {
    * Codex limit recheck: `codex auto run-once --limit-observed <account>`. The CLI records that the official client refused
    * this login (no issuer request), then runs the normal evaluation. A switch is adopted by the handoff from the event log.
    */
-  async codexAutoRunOnceObserved(account: string): Promise<{ outcome: string; reason?: string; limitObserved?: string; limitObservedReason?: string }> {
-    if (!uuidLike.test(account)) return { outcome: "error", reason: "invalid account" };
+  async codexAutoRunOnceObserved(account: string | null): Promise<{ outcome: string; reason?: string; limitObserved?: string; limitObservedReason?: string }> {
+    if (account !== null && !uuidLike.test(account)) return { outcome: "error", reason: "invalid account" };
     if (this.mutating || this.refreshing) return { outcome: "busy", reason: "another SubBaton action is running" };
     this.mutating = true;
     this.invalidate();
     try {
-      const response = await this.call(["codex", "auto", "run-once", "--limit-observed", account], 120000, true);
+      const response = await this.call(["codex", "auto", "run-once", ...(account === null ? [] : ["--limit-observed", account])], 120000, true);
       if (response.error) return { outcome: response.error.outcome === "uncertain" ? "uncertain" : response.error.code === "invalidInput" ? "invalidInput" : "error", reason: response.error.code.slice(0, 40) };
       const result = response.result as { outcome?: unknown; reason?: unknown; limitObserved?: unknown; limitObservedReason?: unknown };
       const text = (value: unknown, max: number) => (typeof value === "string" ? value.slice(0, max) : undefined);

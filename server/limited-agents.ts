@@ -80,10 +80,11 @@ export const waitingMaxAgeSeconds = 7 * 86400;
 /** A recheck that follows a Codex limit: one `codex auto run-once --limit-observed <active account>` call. */
 export interface LimitRecheck {
   /**
-   * Reports the limit for this account and runs the normal automatic evaluation. `invalidInput` as the outcome
-   * means the CLI is too old to know the flag.
+   * Runs the normal automatic evaluation. With an account it also reports that the official client just refused
+   * that login (`--limit-observed`); null runs it plain. `invalidInput` as the outcome means the CLI does not
+   * know the flag.
    */
-  runOnceObserved(accountId: string): Promise<{ outcome: string; reason?: string; limitObserved?: string; limitObservedReason?: string }>;
+  runOnceObserved(accountId: string | null): Promise<{ outcome: string; reason?: string; limitObserved?: string; limitObservedReason?: string }>;
   /** A switch was made: let the handoff poll the event now instead of at its next minute. */
   onSwitched?(): void;
 }
@@ -94,6 +95,8 @@ export interface HookAgent {
   id: string;
   provider: string;
   workspaceId?: string | null;
+  /** ISO time the agent was created, when the host reports it (evidence that its process started after a switch). */
+  createdAt?: string | null;
 }
 export interface RecoveryStore {
   load(): Promise<unknown>;
@@ -159,6 +162,8 @@ export class LimitedAgentRecovery {
     private recheck?: LimitRecheck,
     /** Bound of each recheck CLI step; the same as the CLI call itself (a Codex read can take a while). */
     private recheckTimeoutMs = 120_000,
+    /** Limits that arrive within this window share one recheck (attribution is collected over the burst). */
+    private recheckCollectMs = 250,
   ) {}
 
   private say(message: string) {
@@ -216,18 +221,40 @@ export class LimitedAgentRecovery {
   }
   private rechecking: Promise<void> | null = null;
   private lastRecheckAt = -Infinity;
+  /** Attribution gathered while a recheck waits for its burst to complete. */
+  private burst: { yes: boolean; old: boolean; account: string | null } | null = null;
   /** Resolves when the running recheck (if any) is done. */
   recheckIdle(): Promise<void> {
     return this.rechecking ?? Promise.resolve();
   }
+  /**
+   * Does this agent provably run on the current login? `--limit-observed` names the CURRENT account, so only an agent
+   * whose process started after that account was activated may report it: reloaded for the current switch (ledger),
+   * or created after the switch. A Paseo Codex agent keeps the login it was started or reloaded with.
+   */
+  private attribution(agent: HookAgent): "yes" | "old" | "unknown" {
+    const pending = this.pending;
+    if (!pending) return "unknown";
+    if (this.ledger.state(pending.key, agent.id) === "done") return "yes";
+    const created = agent.createdAt ? Date.parse(agent.createdAt) / 1000 : NaN;
+    if (Number.isFinite(created)) return created > pending.since ? "yes" : "old";
+    return "unknown";
+  }
   /** Single-flight and debounced: several agents hitting the limit together cause one recheck, at most once per minute. */
-  private recheckSoon() {
+  private recheckSoon(agent: HookAgent) {
     if (!this.recheck) return;
-    const burst = `recheck|${Math.floor(this.lastRecheckAt)}`;
-    if (this.rechecking) return this.logOnce("", `${burst}|running`, `recheck skipped reason=already running`);
+    const seen = this.attribution(agent);
+    if (this.burst) {
+      // still collecting: this agent joins the burst, one attributed agent is enough to send the flag
+      if (seen === "yes") this.burst.yes = true;
+      if (seen === "old") this.burst.old = true;
+    }
+    const key = `recheck|${Math.floor(this.lastRecheckAt)}`;
+    if (this.rechecking) return this.logOnce("", `${key}|running`, `recheck skipped reason=already running`);
     if (this.now() - this.lastRecheckAt < recheckWindowSeconds)
-      return this.logOnce("", `${burst}|window`, `recheck skipped reason=within ${recheckWindowSeconds} s of the last recheck`);
+      return this.logOnce("", `${key}|window`, `recheck skipped reason=within ${recheckWindowSeconds} s of the last recheck`);
     this.lastRecheckAt = this.now();
+    this.burst = { yes: seen === "yes", old: seen === "old", account: this.pending?.accountId ?? null };
     const work = this.runRecheck(this.recheck).finally(() => {
       if (this.rechecking === work) this.rechecking = null;
     });
@@ -235,16 +262,31 @@ export class LimitedAgentRecovery {
   }
   private async runRecheck(recheck: LimitRecheck) {
     try {
+      await new Promise((resolve) => setTimeout(resolve, this.recheckCollectMs));
+      const burst = this.burst;
+      this.burst = null;
       const account = await this.currentAccount().catch(() => null);
       if (!account) return void this.say("recheck skipped reason=no active Codex account in the status");
       this.say(`recheck started provider=codex account=${short(account)}`);
-      const decision = await withTimeout(recheck.runOnceObserved(account), this.recheckTimeoutMs);
-      if (decision.outcome === "invalidInput") return void this.say("recheck skipped reason=CLI too old");
-      this.say(
-        `recheck run-once limitObserved=${(decision.limitObserved ?? "unknown").slice(0, 20)} reason=${(decision.limitObservedReason ?? "none").slice(0, 40)} decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`,
-      );
+      const attributed = !!burst?.yes && burst.account === account;
+      const skipReason = attributed ? "" : burst?.old && !burst.yes ? "agent not on the current login" : "attribution unknown";
+      const render = (decision: Awaited<ReturnType<LimitRecheck["runOnceObserved"]>>, observed: string) =>
+        `decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`.replace(/^/, observed);
+      let decision = await withTimeout(recheck.runOnceObserved(attributed ? account : null), this.recheckTimeoutMs);
+      if (attributed && decision.outcome === "invalidInput") {
+        // An older CLI does not know the flag: the immediate evaluation still runs, plain, once.
+        decision = await withTimeout(recheck.runOnceObserved(null), this.recheckTimeoutMs);
+        this.say(`recheck ${render(decision, "limitObserved=unsupported (invalidInput), fell back to plain run-once ")}`);
+      } else if (!attributed) {
+        this.say(`recheck run-once ${render(decision, `limitObserved=skipped reason=${skipReason} `)}`);
+      } else {
+        this.say(
+          `recheck run-once limitObserved=${(decision.limitObserved ?? "unknown").slice(0, 20)} reason=${(decision.limitObservedReason ?? "none").slice(0, 40)} decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`,
+        );
+      }
       if (decision.outcome === "switched") recheck.onSwitched?.();
     } catch (error) {
+      this.burst = null;
       this.say(`recheck skipped reason=${error instanceof Error && error.message === "timeout" ? "timeout" : "unexpected error"}`);
     }
   }
@@ -289,7 +331,7 @@ export class LimitedAgentRecovery {
       const via = limitMatch(outcome);
       if (via) {
         // The switch decision does not depend on whether we may message this agent: every positive limit rechecks.
-        this.recheckSoon();
+        this.recheckSoon(agent);
         if (continuation) {
           // A limited continuation is never continued again until new user activity.
           if (!this.state.suppressed.includes(agent.id)) this.state.suppressed.push(agent.id);

@@ -31,6 +31,8 @@ export type FooterCell = {
   meter: boolean;
   /** Text colour token: the host foreground (as in Paseo's CPU box), status colour only near or at the limit. */
   textTone: "text" | "warning" | "danger";
+  /** Codex refused this login with a usage limit (the account has limitObservedAt): spoken, tone danger. */
+  limitHit?: boolean;
   /** A 100 % window on an account that keeps working on paid usage: spoken only, the meter stays red. */
   paidNote?: "credits" | "extra usage";
   /** Credits item only: the value as spoken ("71,023 credits"). */
@@ -93,12 +95,14 @@ export function footerCell(
     return { kind: "unknown", label, percent: "—", tone: "unknown", fill: 0, clock: false, meter: true, textTone: "text", spoken };
   if (value >= 100 && !window.inferred) {
     const paid = account ? paidCarriesOn(account, now) : null;
-    return { kind: "blocked", label, percent: "100%", tone: "danger", fill: 100, clock: false, meter: true, textTone: "danger", spoken, ...(paid ? { paidNote: paid } : {}) };
+    return { kind: "blocked", label, percent: "100%", tone: "danger", fill: 100, clock: false, meter: true, textTone: "danger", spoken, ...(paid ? { paidNote: paid } : {}), ...(account?.limitObservedAt != null ? { limitHit: true } : {}) };
   }
   const old = stale(window, opts.offline, now);
   const text = percentText(value, old, window.inferred);
-  const level = severity(value, false, opts.warning, opts.danger);
+  const limitHit = account?.limitObservedAt != null;
+  const level = limitHit ? "danger" : severity(value, false, opts.warning, opts.danger);
   return {
+    ...(limitHit ? { limitHit: true } : {}),
     kind: old ? "stale" : "value",
     label,
     percent: old ? `~${text}` : text,
@@ -149,7 +153,7 @@ export function footerSpeech(provider: Provider, cell: FooterCell): string {
   const subject = `${providerLabel[provider]} ${cell.spoken}`;
   if (cell.kind === "unknown") return `${subject}, unknown`;
   if (cell.kind === "blocked")
-    return cell.percent === "100%" ? `${subject}, 100 percent used, exhausted${cell.paidNote ? `, running on ${cell.paidNote}` : ""}` : `${subject}, unavailable`;
+    return cell.percent === "100%" ? `${subject}, 100 percent used, exhausted${cell.paidNote ? `, running on ${cell.paidNote}` : ""}${cell.limitHit ? ", usage limit hit" : ""}` : `${subject}, unavailable`;
   const stale = cell.kind === "stale";
   if (!cell.meter) {
     const value = cell.spokenValue ?? (stale ? cell.percent.replace(/^~/, "") : cell.percent).replace("∞", "unlimited");
@@ -159,5 +163,5 @@ export function footerSpeech(provider: Provider, cell: FooterCell): string {
   const number = cell.percent.replace(/^[~≈]/, "").replace("%", "");
   if (stale) return `${subject}, about ${number} percent used, stale`;
   if (estimated) return `${subject}, about ${number} percent used, estimated`;
-  return `${subject}, ${number} percent used${cell.textTone === "warning" ? ", near limit" : cell.textTone === "danger" ? ", over the danger threshold" : ""}`;
+  return `${subject}, ${number} percent used${cell.limitHit ? ", usage limit hit" : cell.textTone === "warning" ? ", near limit" : cell.textTone === "danger" ? ", over the danger threshold" : ""}`;
 }

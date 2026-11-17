@@ -169,7 +169,10 @@ export class LimitedAgentRecovery {
     private recheckTimeoutMs = 120_000,
     /** Limits that arrive within this window share one recheck (attribution is collected over the burst). */
     private recheckCollectMs = 250,
-  ) {}
+  ) {
+    // A successful reload (by the handoff or by this recovery) restarts the agent's app-server: that is its open time too.
+    this.ledger.onReloaded = (agentId) => this.sessionOpened(agentId, "reload");
+  }
 
   private say(message: string) {
     try {
@@ -191,6 +194,9 @@ export class LimitedAgentRecovery {
       } catch {
         this.trusted = false;
       }
+      this.loaded = true;
+      for (const [id, at] of this.earlyOpened) this.state.opened[id] = Math.max(this.state.opened[id] ?? 0, at);
+      this.earlyOpened.clear();
       if (!this.trusted) this.say("state file unreadable, continuation disabled until it is fixed");
     })();
     return this.ready;
@@ -225,6 +231,9 @@ export class LimitedAgentRecovery {
   private clearLogged(agentId: string) {
     for (const key of [...this.waitLogged]) if (key.startsWith(`${agentId}\0`)) this.waitLogged.delete(key);
   }
+  private loaded = false;
+  /** Opens seen before the state file was read; merged in once it is. */
+  private earlyOpened = new Map<string, number>();
   private rechecking: Promise<void> | null = null;
   private lastRecheckAt = -Infinity;
   /** What the plugin knows about the agents of a burst while a recheck collects them. */
@@ -236,11 +245,18 @@ export class LimitedAgentRecovery {
     return this.rechecking ?? Promise.resolve();
   }
   /** agent.open.before: the agent's session (and so its Codex app-server, with the login it reads then) opens now. */
-  async sessionOpened(agentId: string, reason: string): Promise<void> {
-    await this.init();
-    this.state.opened[agentId] = this.now();
+  sessionOpened(agentId: string, reason: string): void {
+    // Recorded in memory at once; the state file is written in the background (errors are logged, never thrown).
+    const at = this.now();
+    if (this.loaded) this.state.opened[agentId] = Math.max(this.state.opened[agentId] ?? 0, at);
+    else this.earlyOpened.set(agentId, at);
     this.say(`session opened agent=${short(agentId)} reason=${reason.slice(0, 20)}`);
-    await this.persist();
+    void this.init()
+      .then(() => this.persist())
+      .then((saved) => {
+        if (!saved) this.say(`session open of agent=${short(agentId)} could not be saved`);
+      })
+      .catch(() => this.say(`session open of agent=${short(agentId)} could not be saved`));
   }
   /**
    * Which login does this limited turn belong to? Reference: when the active account was activated. An app-server keeps

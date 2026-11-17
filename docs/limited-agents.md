@@ -55,4 +55,8 @@ Every positive Codex limit starts one recheck (single flight, at most once per 6
 
 One current or unknown agent in a burst is enough; known-old agents never count. If the CLI does not know the flag (`invalidInput`), the recheck falls back once to a plain run-once.
 
-**To verify live:** that a handoff `reload()` fires `agent.open.before` (reason `refresh` or `resume`). The plugin logs `limited-agents: session opened agent=<8> reason=<...>` for every open, so the owner can confirm it in `paseo plugin logs subbaton`. Until it is confirmed, reloaded agents are "unknown" (flag sent) rather than "current".
+**Reloads count even if `agent.open.before` does not fire.** A successful reload by the plugin (the handoff's reopen or the recovery's own reload, both through the shared reload ledger) records the agent's open time at the moment the reload finishes (logged as `session opened ... reason=reload`). The later of the two records wins. So attribution does not depend on `reload()` firing `agent.open.before`; the hook still covers agents created, resumed or reloaded by Paseo itself.
+
+**To verify live:** whether a `reload()` also fires `agent.open.before` (reason `refresh` or `resume`). The plugin logs every open in `paseo plugin logs subbaton` (`limited-agents: session opened agent=<8> reason=<...>`), so the owner can see it. Without a record (an agent opened before the plugin started and never reloaded) the agent is "unknown" and the flag is sent; the core's plausibility gate protects a healthy account.
+
+The open time is kept in memory at once and written to the state file in the background; a failing write is logged, never thrown.

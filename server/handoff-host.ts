@@ -97,7 +97,7 @@ export function registerHandoff(
   const removeOpen = server.addHook("agent.open.before", async (payload) => {
     const request = (payload as { request?: { agentId?: string; provider?: string; reason?: string } }).request;
     if (request?.provider === "codex" && typeof request.agentId === "string")
-      await recovery.sessionOpened(request.agentId, String(request.reason ?? "unknown")).catch(() => undefined);
+      recovery.sessionOpened(request.agentId, String(request.reason ?? "unknown"));
   });
   const removeArchive = server.addHook("agent.archive.after", async (event) => {
     const e = event as HookEvent;

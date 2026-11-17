@@ -20,8 +20,17 @@ export class ReloadLedger {
     agents.set(agentId, "inflight");
     return true;
   }
+  /** Called when a reload finished successfully: the agent's session (and app-server) just started. */
+  onReloaded: ((agentId: string) => void) | null = null;
   finish(switchKey: string, agentId: string, ok: boolean) {
     this.switches.get(switchKey)?.set(agentId, ok ? "done" : "failed");
+    if (ok) {
+      try {
+        this.onReloaded?.(agentId);
+      } catch {
+        // recording the start never changes a reload
+      }
+    }
   }
   state(switchKey: string, agentId: string): ReloadState | null {
     return this.switches.get(switchKey)?.get(agentId) ?? null;

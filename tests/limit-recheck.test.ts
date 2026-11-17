@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { LimitedAgentRecovery, type LimitRecheck, type RecoveryStore } from "../server/limited-agents.js";
+import { ReloadLedger } from "../server/reload-ledger.js";
 import { registerHandoff } from "../server/handoff-host.js";
 import { scripted, ok, refused } from "./settings-fixtures.js";
 import { status } from "./fixtures.js";
@@ -188,6 +189,73 @@ test("attribution: an agent opened BEFORE the account was activated (old login, 
   await settle(r);
   assert.deepEqual(rc.calls, ["run-once:plain"], "plain run-once, no flag");
   assert.ok(has(r, /recheck run-once limitObserved=skipped reason=agent not on the current login decision=stay reason=belowThreshold/), r.logs.join("\n"));
+});
+test("attribution: a successful reload is itself the open time (reload() need not fire agent.open.before)", async () => {
+  const ledger = new ReloadLedger();
+  const rc = fakeRecheck();
+  const clock = { t: 1000 };
+  const logs: string[] = [];
+  const accountUsage = async () => ({ id: ACTIVE, activatedAt: 500, windows: [] }) as never;
+  const recovery = new LimitedAgentRecovery(memoryStore(), async () => true, async () => ACTIVE, () => clock.t, 30_000, (l) => void logs.push(l), accountUsage, ledger, rc.recheck, undefined, 20);
+  clock.t = 600;
+  ledger.claim("txn:1", "reloaded");
+  ledger.finish("txn:1", "reloaded", true); // the handoff (or the recovery) reloaded it: no open.before was seen
+  ledger.claim("txn:1", "failed");
+  ledger.finish("txn:1", "failed", false); // a failed reload proves nothing
+  clock.t = 900;
+  await recovery.turnBefore(agent("reloaded"), "t1");
+  await recovery.turnBefore(agent("failed"), "t1");
+  clock.t = 1000;
+  await recovery.turnAfter(agent("reloaded"), "t1", failed);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await recovery.recheckIdle();
+  assert.deepEqual(rc.calls, [`run-once:${ACTIVE}`]);
+  assert.ok(!logs.some((l) => /attribution unknown/.test(l)), "the reload makes the agent 'current', not unknown");
+  assert.ok(logs.some((l) => /session opened agent=reloaded reason=reload/.test(l)));
+  assert.ok(!logs.some((l) => /session opened agent=failed/.test(l)));
+});
+test("attribution: the later of the open.before time and the reload time wins", async () => {
+  const ledger = new ReloadLedger();
+  const rc = fakeRecheck();
+  const clock = { t: 1000 };
+  const recovery = new LimitedAgentRecovery(memoryStore(), async () => true, async () => ACTIVE, () => clock.t, 30_000, () => {}, async () => ({ id: ACTIVE, activatedAt: 500, windows: [] }) as never, ledger, rc.recheck, undefined, 20);
+  clock.t = 700;
+  await recovery.sessionOpened("a", "refresh");
+  clock.t = 800;
+  ledger.claim("k", "a");
+  ledger.finish("k", "a", true);
+  clock.t = 900;
+  await recovery.turnBefore(agent("a"), "t1");
+  clock.t = 950;
+  await recovery.sessionOpened("a", "refresh"); // an even later open (a reload in the gap): not evidence for the turn
+  clock.t = 1000;
+  await recovery.turnAfter(agent("a"), "t1", failed);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await recovery.recheckIdle();
+  assert.deepEqual(rc.calls, ["run-once:plain"]);
+});
+test("recording an open does not wait for the state file; a failing save is logged, never thrown", async () => {
+  let release: (() => void) | null = null;
+  let fail = false;
+  const store: RecoveryStore = {
+    load: async () => null,
+    save: async () => {
+      if (fail) throw new Error("disk full");
+      await new Promise<void>((resolve) => (release = resolve));
+    },
+  };
+  const clock = { t: 1000 };
+  const logs: string[] = [];
+  const recovery = new LimitedAgentRecovery(store, async () => true, async () => ACTIVE, () => clock.t, 30_000, (l) => void logs.push(l));
+  const started = Date.now();
+  await recovery.sessionOpened("slow", "create"); // the save is still pending
+  assert.ok(Date.now() - started < 200, "returns without waiting for the save");
+  assert.ok(logs.some((l) => /session opened agent=slow reason=create/.test(l)));
+  (release as (() => void) | null)?.();
+  fail = true;
+  await recovery.sessionOpened("bad", "create"); // save throws
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(logs.some((l) => /session opened agent=bad/.test(l)));
 });
 test("attribution: opened after the activation and before the turn started: flag", async () => {
   const rc = fakeRecheck();
@@ -407,6 +475,22 @@ test("host: an agent opened before the account was activated (still on the old l
   assert.deepEqual(codexCalls(h.cli), [["codex", "auto", "run-once", "--json"]], "no --limit-observed");
   assert.ok(lines.some((l) => /limitObserved=skipped reason=agent not on the current login/.test(l)), lines.join("\n"));
   assert.ok(lines.some((l) => /session opened agent=old reason=refresh/.test(l)), "the open is logged so the owner can confirm the hook fires");
+  h.host.cleanup();
+});
+test("host: a reload that fires no agent.open.before still makes the agent 'current' afterwards", async () => {
+  const h = await hostHarness({ outcome: "stay", reason: "belowThreshold", limitObserved: "recorded" });
+  await h.adoptInitial(); // the handoff reloaded c1 and c2; the fake Paseo fires no agent.open.before for it
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (line: unknown) => void lines.push(String(line));
+  try {
+    await h.limited("c1");
+    await sleep(400);
+  } finally {
+    console.log = original;
+  }
+  assert.deepEqual(codexCalls(h.cli), [["codex", "auto", "run-once", "--limit-observed", B, "--json"]]);
+  assert.ok(!lines.some((l) => /attribution unknown/.test(l)), lines.join("\n"));
   h.host.cleanup();
 });
 test("host: an agent whose session open was never seen (unknown) reports the limit; the core's plausibility gate applies", async () => {

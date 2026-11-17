@@ -16,19 +16,22 @@ function codexBalance(paid: PaidUsage): string | null {
   if (paid.balance !== undefined && paid.balance.trim() !== "") return paid.balance;
   return null;
 }
+/** A stale paid reading keeps the "Using credits" label only for this long (15 minutes); older readings show the plain red Exhausted. */
+export const paidLabelMaxAgeSeconds = 15 * 60;
 /**
- * Can paid usage carry on once a subscription window is exhausted? Codex: credits that exist (or unlimited);
- * Claude: extra usage enabled with room left. The reading may be stale: the label still holds, and the paid lines
- * already show its age. Mirrors the core's PaidUsage.eligible without its freshness rule.
+ * Can paid usage carry on once a subscription window is exhausted? Matches the core's PaidUsage.eligible and the
+ * app's carriesOn apart from staleness: a reading up to 15 minutes old still counts (the paid lines show its age).
+ * Codex: hasCredits is not false, the balance is not <= 0, and either unlimited or hasCredits true with a balance > 0.
+ * Claude: extra usage enabled, utilization < 100, used < monthly limit.
  */
-export function paidCarriesOn(account: Pick<Account, "paidUsage">): "credits" | "extra usage" | null {
+export function paidCarriesOn(account: Pick<Account, "paidUsage">, now = Date.now() / 1000): "credits" | "extra usage" | null {
   const paid = account.paidUsage;
-  if (!paid) return null;
+  if (!paid || !Number.isFinite(paid.fetchedAt) || now - paid.fetchedAt > paidLabelMaxAgeSeconds) return null;
   if (paid.kind === "credits") {
-    if (paid.unlimited === true) return "credits";
-    if (paid.hasCredits !== true) return null;
+    if (paid.hasCredits === false) return null;
     const amount = paid.balance !== undefined && /^[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/.test(paid.balance.trim()) ? Number(paid.balance) : undefined;
-    return amount !== undefined && amount <= 0 ? null : "credits";
+    if (amount !== undefined && amount <= 0) return null;
+    return paid.unlimited === true || (paid.hasCredits === true && amount !== undefined && amount > 0) ? "credits" : null;
   }
   if (paid.enabled !== true) return null;
   if (paid.utilization !== undefined && paid.utilization >= 100) return null;

@@ -485,13 +485,30 @@ export class SubBatonService {
   private refreshOne(provider: Provider, account: string): Promise<ActionResult> {
     return this.mutation([...(provider === "claude" ? [] : [provider]), "usage", account, "--refresh"]);
   }
-  /** Codex limit recheck, part 1: a forced fresh read of one account. Only a completed read counts; floors and backoff are the CLI's. */
-  async codexRefreshAccount(account: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  /** Codex limit recheck, part 1: a forced read of one account. Only a completed read counts; a `cached` answer (inside the CLI's request floor) is reported as such. */
+  async codexRefreshAccount(account: string): Promise<{ ok: true; cached: boolean } | { ok: false; reason: string }> {
     if (!uuidLike.test(account)) return { ok: false, reason: "invalid account" };
-    const result = await this.refreshOne("codex", account);
-    if (result.outcome === "success") return { ok: true };
-    const reasons: Record<string, string> = { rateLimited: "rate limited or inside the request floor", accessExpired: "access token expired", unverifiedUsage: "reading not trusted", usageUnavailable: "usage unavailable", busy: "another SubBaton action is running", needsRenewal: "needs renewal" };
-    return { ok: false, reason: reasons[result.code] ?? result.code.slice(0, 40) };
+    if (this.mutating || this.refreshing) return { ok: false, reason: "another SubBaton action is running" };
+    this.mutating = true;
+    this.invalidate();
+    try {
+      const response = await this.call(["codex", "usage", account, "--refresh"], 120000, true, { kind: "read" });
+      if (response.error) return { ok: false, reason: response.error.outcome === "uncertain" ? "result unknown" : response.error.code.slice(0, 40) };
+      const result = (response.result ?? {}) as { status?: unknown; cached?: unknown };
+      if (result.status === "ok") return { ok: true, cached: result.cached === true };
+      const reasons: Record<string, string> = {
+        "rate-limited": "rate limited or inside the request floor",
+        "usage-unknown-until-active": "access token expired",
+        "access-token-expired": "access token expired",
+        "unverified-isolation": "reading not trusted",
+        "identity-mismatch": "reading not trusted",
+        "needs-renewal": "needs renewal",
+      };
+      return { ok: false, reason: reasons[String(result.status)] ?? "usage unavailable" };
+    } finally {
+      this.invalidate();
+      this.mutating = false;
+    }
   }
   /** Codex limit recheck, part 2: is automatic switching on (cached status)? */
   async codexAutoState(): Promise<"on" | "off" | "paused" | null> {

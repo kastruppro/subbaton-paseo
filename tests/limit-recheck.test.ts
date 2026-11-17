@@ -14,7 +14,7 @@ const memoryStore = (): RecoveryStore => {
 };
 const ACTIVE = "11111111-1111-4111-8111-111111111111";
 
-function fakeRecheck(opts: { refresh?: { ok: true } | { ok: false; reason: string }; auto?: "on" | "off" | "paused" | null; outcome?: { outcome: string; reason?: string } } = {}) {
+function fakeRecheck(opts: { refresh?: { ok: true; cached?: boolean } | { ok: false; reason: string }; auto?: "on" | "off" | "paused" | null; outcome?: { outcome: string; reason?: string } } = {}) {
   const calls: string[] = [];
   let release: (() => void) | null = null;
   const recheck: LimitRecheck = {
@@ -106,18 +106,101 @@ test("a stay decision is logged and never retried inside the window", async () =
   await r.recovery.recheckIdle();
   assert.equal(rc.calls.filter((c) => c === "run-once").length, 1);
 });
-test("no recheck when the setting is off (no candidate is recorded) or without a recheck dependency", async () => {
-  const rc = fakeRecheck();
+test("(a) every positive Codex limit starts the recheck, also without a continuation candidate", async () => {
+  // setting off: no candidate is recorded, the recheck still runs
+  const off = fakeRecheck();
   const clock = { t: 1000 };
-  const recovery = new LimitedAgentRecovery(memoryStore(), async () => false, async () => ACTIVE, () => clock.t, 30_000, () => {}, undefined, undefined, rc.recheck);
+  const logs: string[] = [];
+  const recovery = new LimitedAgentRecovery(memoryStore(), async () => false, async () => ACTIVE, () => clock.t, 30_000, (l) => void logs.push(l), undefined, undefined, off.recheck);
   await recovery.turnBefore(agent("a"), "t1");
   await recovery.turnAfter(agent("a"), "t1", failed);
+  await new Promise((resolve) => setImmediate(resolve));
+  off.finishRefresh();
   await recovery.recheckIdle();
-  assert.deepEqual(rc.calls, []);
+  assert.deepEqual(off.calls, [`refresh:${ACTIVE}`, "autoState", "run-once"]);
+  // no turn id, and a continuation that hits the limit again
+  const rc = fakeRecheck();
+  const r = make(rc);
+  await r.recovery.turnBefore(agent("b"), null);
+  await r.recovery.turnAfter(agent("b"), null, failed);
+  await new Promise((resolve) => setImmediate(resolve));
+  rc.finishRefresh();
+  await r.recovery.recheckIdle();
+  assert.ok(rc.calls.includes("run-once"), "a limit without a turn id still rechecks");
+  // a failure that is not a limit never rechecks
+  const quiet = fakeRecheck();
+  const q = make(quiet);
+  await q.recovery.turnBefore(agent("c"), "t1");
+  await q.recovery.turnAfter(agent("c"), "t1", { kind: "failed", error: { message: "Network unreachable" } });
+  await q.recovery.turnAfter(agent("c"), "t2", { kind: "completed" });
+  await q.recovery.recheckIdle();
+  assert.deepEqual(quiet.calls, []);
+  // without a recheck dependency nothing breaks
   const bare = new LimitedAgentRecovery(memoryStore(), async () => true, async () => ACTIVE, () => clock.t, 30_000, () => {});
   await bare.turnBefore(agent("a"), "t1");
   await bare.turnAfter(agent("a"), "t1", failed);
   await bare.recheckIdle();
+});
+test("(a) a continuation that hits a limit again also rechecks", async () => {
+  const rc = fakeRecheck();
+  const r = make(rc);
+  const port = { agents: [] as unknown[] };
+  void port;
+  // record the first limit, adopt a switch and let the continuation go out
+  await limitOn(r, "a");
+  await new Promise((resolve) => setImmediate(resolve));
+  rc.finishRefresh();
+  await r.recovery.recheckIdle();
+  const before = rc.calls.length;
+  r.clock.t += 120;
+  await r.recovery.adopt("txn:1", ACTIVE);
+  let st = "error";
+  const fake = {
+    list: async () => [{ id: "a", provider: "codex", status: st, activeTurn: false }],
+    reload: async () => void (st = "idle"),
+    send: async () => {},
+  };
+  await r.recovery.run(fake as never);
+  r.clock.t += 120;
+  await r.recovery.turnBefore(agent("a"), "t2"); // our continuation's turn
+  await r.recovery.turnAfter(agent("a"), "t2", failed); // hits the limit again
+  await new Promise((resolve) => setImmediate(resolve));
+  rc.finishRefresh();
+  await r.recovery.recheckIdle();
+  assert.ok(rc.calls.length > before, "the continuation's limit rechecks as well");
+  assert.ok(has(r, /continuation hit a limit again/));
+});
+test("(b) a refresh that takes longer than 30 s is not cut off; a real timeout is logged as timeout", async () => {
+  const slow = fakeRecheck();
+  const clock = { t: 1000 };
+  const logs: string[] = [];
+  const recovery = new LimitedAgentRecovery(memoryStore(), async () => true, async () => ACTIVE, () => clock.t, 20, (l) => void logs.push(l), undefined, undefined, slow.recheck);
+  await recovery.turnBefore(agent("a"), "t1");
+  await recovery.turnAfter(agent("a"), "t1", failed);
+  await new Promise((resolve) => setTimeout(resolve, 60)); // longer than the short per-call timeout used elsewhere
+  slow.finishRefresh();
+  await recovery.recheckIdle();
+  assert.ok(slow.calls.includes("run-once"), "the refresh is bounded like the CLI call, not by the short timeout");
+  // a refresh that never answers is a timeout, not an unexpected error
+  const stuckLogs: string[] = [];
+  const stuck: LimitRecheck = { autoState: async () => "on", refresh: () => new Promise(() => {}), runOnce: async () => ({ outcome: "stay" }) };
+  const timed = new LimitedAgentRecovery(memoryStore(), async () => true, async () => ACTIVE, () => clock.t, 20, (l) => void stuckLogs.push(l), undefined, undefined, stuck, 30);
+  await timed.turnBefore(agent("a"), "t1");
+  await timed.turnAfter(agent("a"), "t1", failed);
+  await timed.recheckIdle();
+  assert.ok(stuckLogs.some((l) => /recheck skipped reason=timeout/.test(l)), stuckLogs.join("\n"));
+  assert.ok(!stuckLogs.some((l) => /unexpected error/.test(l)));
+});
+test("a cached refresh (inside the request floor) is not logged as fresh and still runs run-once", async () => {
+  const rc = fakeRecheck({ refresh: { ok: true, cached: true } });
+  const r = make(rc);
+  await limitOn(r, "a");
+  await new Promise((resolve) => setImmediate(resolve));
+  rc.finishRefresh();
+  await r.recovery.recheckIdle();
+  assert.ok(has(r, /recheck read provider=codex account=11111111 cached/), r.logs.join("\n"));
+  assert.ok(!has(r, /recheck read provider=codex account=\S+ fresh$/));
+  assert.ok(rc.calls.includes("run-once"));
 });
 
 // Service and host level: real argv through the trusted CLI port, and the adopted switch flows into the existing handoff.
@@ -203,5 +286,21 @@ test("host: a rate-limited refresh stops the recheck before run-once", async () 
   await h.limited("c1");
   await sleep(100);
   assert.deepEqual(codexCalls(h.cli), [["codex", "usage", B, "--refresh", "--json"]]);
+  h.host.cleanup();
+});
+
+test("host: a refresh answered from the cache (cached:true) is not trusted as fresh", async () => {
+  const h = await hostHarness(true, { status: "ok", cached: true });
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (line: unknown) => void lines.push(String(line));
+  try {
+    await h.limited("c1");
+    await sleep(120);
+  } finally {
+    console.log = original;
+  }
+  assert.ok(lines.some((l) => /recheck read provider=codex account=55555555 cached/.test(l)), lines.join("\n"));
+  assert.deepEqual(codexCalls(h.cli).map((a) => a[1]), ["usage", "auto"], "run-once still runs, no worse than before");
   h.host.cleanup();
 });

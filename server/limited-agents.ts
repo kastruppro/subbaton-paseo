@@ -82,7 +82,7 @@ export interface LimitRecheck {
   /** Automatic switching for Codex from the cached status; null when unknown. */
   autoState(): Promise<"on" | "off" | "paused" | null>;
   /** Forced fresh read of one account (`codex usage <id> --refresh`); a refusal carries a short reason. */
-  refresh(accountId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  refresh(accountId: string): Promise<{ ok: true; cached?: boolean } | { ok: false; reason: string }>;
   /** `codex auto run-once`: the decision and its reason. */
   runOnce(): Promise<{ outcome: string; reason?: string }>;
   /** A switch was made: let the handoff poll the event now instead of at its next minute. */
@@ -158,6 +158,8 @@ export class LimitedAgentRecovery {
     private ledger: ReloadLedger = new ReloadLedger(),
     /** Optional: re-read the active account and evaluate automatic switching right after a Codex limit. */
     private recheck?: LimitRecheck,
+    /** Bound of each recheck CLI step; the same as the CLI call itself (a Codex read can take a while). */
+    private recheckTimeoutMs = 120_000,
   ) {}
 
   private say(message: string) {
@@ -237,16 +239,17 @@ export class LimitedAgentRecovery {
       const account = await this.currentAccount().catch(() => null);
       if (!account) return void this.say("recheck skipped reason=no active Codex account in the status");
       this.say(`recheck started provider=codex account=${short(account)}`);
-      const read = await withTimeout(recheck.refresh(account), this.timeoutMs);
+      const read = await withTimeout(recheck.refresh(account), this.recheckTimeoutMs);
       if (!read.ok) return void this.say(`recheck skipped reason=refresh refused (${read.reason.slice(0, 80)})`);
-      this.say(`recheck read provider=codex account=${short(account)} fresh`);
+      // Inside the CLI's request floor the answer comes from the cache: not a fresh read, but run-once still runs.
+      this.say(`recheck read provider=codex account=${short(account)} ${read.cached ? "cached (inside the request floor, not a fresh read)" : "fresh"}`);
       const auto = await recheck.autoState().catch(() => null);
       if (auto === "off" || auto === "paused") return void this.say(`recheck skipped reason=automatic switching ${auto}`);
-      const decision = await withTimeout(recheck.runOnce(), Math.max(this.timeoutMs, 120_000));
+      const decision = await withTimeout(recheck.runOnce(), this.recheckTimeoutMs);
       this.say(`recheck run-once decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`);
       if (decision.outcome === "switched") recheck.onSwitched?.();
-    } catch {
-      this.say("recheck skipped reason=unexpected error");
+    } catch (error) {
+      this.say(`recheck skipped reason=${error instanceof Error && error.message === "timeout" ? "timeout" : "unexpected error"}`);
     }
   }
 
@@ -289,6 +292,8 @@ export class LimitedAgentRecovery {
       this.forget(agent.id, outcome.kind === "canceled" ? "canceled" : outcome.kind === "completed" ? "turn completed" : undefined);
       const via = limitMatch(outcome);
       if (via) {
+        // The switch decision does not depend on whether we may message this agent: every positive limit rechecks.
+        this.recheckSoon();
         if (continuation) {
           // A limited continuation is never continued again until new user activity.
           if (!this.state.suppressed.includes(agent.id)) this.state.suppressed.push(agent.id);
@@ -301,7 +306,6 @@ export class LimitedAgentRecovery {
         else {
           this.candidates.set(agent.id, { turnId, at: this.now() });
           this.say(`limit detected agent=${who} provider=codex via=${via} turn=${short(turnId)}`);
-          this.recheckSoon();
         }
       } else if (continuation) {
         this.dropLineage(agent.id);

@@ -92,7 +92,7 @@ export function footerCell(
   if (!window || value === null || passed)
     return { kind: "unknown", label, percent: "—", tone: "unknown", fill: 0, clock: false, meter: true, textTone: "text", spoken };
   if (value >= 100 && !window.inferred) {
-    const paid = account ? paidCarriesOn(account) : null;
+    const paid = account ? paidCarriesOn(account, now) : null;
     return { kind: "blocked", label, percent: "100%", tone: "danger", fill: 100, clock: false, meter: true, textTone: "danger", spoken, ...(paid ? { paidNote: paid } : {}) };
   }
   const old = stale(window, opts.offline, now);

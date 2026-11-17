@@ -86,7 +86,7 @@ export function accountBadge(
     return { text: "Needs renewal", tone: "warning" };
   if (worst >= 100) {
     // Paid usage can carry on (SubBaton may have switched here on purpose): it costs money, so a warning, not a danger.
-    const paid = paidCarriesOn(account);
+    const paid = paidCarriesOn(account, now);
     if (paid)
       return account.active
         ? { text: paid === "credits" ? "Using credits" : "Using extra usage", tone: "warning" }
@@ -102,11 +102,12 @@ export function rowGlyph(
   account: Account | undefined,
   warning: number,
   danger: number,
+  now = Date.now() / 1000,
 ): "ok" | "warn" | "crit" | "mute" {
   if (!account) return "mute";
   let tone = accountTone(account, warning, danger);
   // An exhausted account that keeps working on paid usage is a warning; blocked health stays critical.
-  if (tone === "danger" && !["needsLogin", "quarantined", "deviceBlocked"].includes(account.health) && paidCarriesOn(account)) tone = "warning";
+  if (tone === "danger" && !["needsLogin", "quarantined", "deviceBlocked"].includes(account.health) && paidCarriesOn(account, now)) tone = "warning";
   return tone === "normal" ? "ok" : tone === "warning" ? "warn" : tone === "danger" ? "crit" : "mute";
 }
 export function otherAccountSummary(

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { statusSchema, displaySchema, type Window, type Account } from "../shared/contracts.js";
 import { status } from "./fixtures.js";
+import { paidCarriesOn } from "../client/paid-model.js";
 import {
   footerGrid,
   footerCell,
@@ -331,8 +332,8 @@ test("several other accounts can be open at once and the open state survives a s
 
 // 0.9.8: an exhausted window on an account that keeps working on paid usage is "Using credits", not "Exhausted".
 const exhausted = [win("five_hour", { usedPercent: 40 }), win("seven_day", { usedPercent: 100, resetsAt: 4_000_000_000 })];
-const credits = (patch: Record<string, unknown> = {}) => ({ kind: "credits" as const, fetchedAt: 1, stale: false, hasCredits: true, balance: "70612", ...patch });
-const extra = (patch: Record<string, unknown> = {}) => ({ kind: "extraUsage" as const, fetchedAt: 1, stale: false, enabled: true, utilization: 20, monthlyLimit: 500, usedCredits: 100, ...patch });
+const credits = (patch: Record<string, unknown> = {}) => ({ kind: "credits" as const, fetchedAt: 990, stale: false, hasCredits: true, balance: "70612", ...patch });
+const extra = (patch: Record<string, unknown> = {}) => ({ kind: "extraUsage" as const, fetchedAt: 990, stale: false, enabled: true, utilization: 20, monthlyLimit: 500, usedCredits: 100, ...patch });
 const badgeOf = (a: Partial<Account>) => accountBadge(acct({ windows: exhausted, ...a }), 80, 100, 1_000);
 test("badge: an exhausted Codex account on credits says Using credits (active) or Exhausted, credits left (inactive), as a warning", () => {
   assert.deepEqual(badgeOf({ active: true, paidUsage: credits() }), { text: "Using credits", tone: "warning" });
@@ -343,11 +344,32 @@ test("badge: an exhausted Claude account with extra usage on says Using extra us
   assert.deepEqual(badgeOf({ active: true, paidUsage: extra() }), { text: "Using extra usage", tone: "warning" });
   assert.deepEqual(badgeOf({ active: false, paidUsage: extra() }), { text: "Exhausted, extra usage on", tone: "warning" });
 });
-test("badge: a stale paid reading still gives the label; no credits, no paid reading or extra usage off stay Exhausted (danger)", () => {
-  assert.equal(badgeOf({ active: true, paidUsage: credits({ stale: true, fetchedAt: 0 }) })?.text, "Using credits");
-  assert.equal(badgeOf({ active: true, paidUsage: extra({ stale: true }) })?.text, "Using extra usage");
+test("badge: a stale paid reading keeps the label for at most 15 minutes; no credits, no paid reading or extra usage off stay Exhausted (danger)", () => {
+  assert.equal(badgeOf({ active: true, paidUsage: credits({ stale: true, fetchedAt: 1_000 - 600 }) })?.text, "Using credits", "10 minutes old");
+  assert.equal(badgeOf({ active: true, paidUsage: extra({ stale: true, fetchedAt: 1_000 - 900 }) })?.text, "Using extra usage", "exactly 15 minutes");
+  assert.deepEqual(badgeOf({ active: true, paidUsage: credits({ stale: true, fetchedAt: 1_000 - 901 }) }), { text: "Exhausted", tone: "danger" }, "older than 15 minutes");
+  assert.deepEqual(badgeOf({ active: false, paidUsage: extra({ fetchedAt: 1_000 - 4000 }) }), { text: "Exhausted", tone: "danger" });
   for (const paidUsage of [undefined, credits({ hasCredits: false, balance: "0" }), credits({ hasCredits: false }), credits({ balance: "0", hasCredits: true }), extra({ enabled: false }), extra({ utilization: 100 }), extra({ usedCredits: 500 }), extra({ monthlyLimit: 0 })])
     assert.deepEqual(badgeOf({ active: true, paidUsage }), { text: "Exhausted", tone: "danger" }, JSON.stringify(paidUsage));
+});
+test("paidCarriesOn matches the core's PaidUsage.eligible (apart from staleness)", () => {
+  const c = (paid: Record<string, unknown>) => paidCarriesOn({ paidUsage: { kind: "credits", fetchedAt: 990, stale: false, ...paid } as never }, 1_000);
+  assert.equal(c({ hasCredits: true, balance: "5" }), "credits");
+  assert.equal(c({ unlimited: true }), "credits");
+  assert.equal(c({ unlimited: true, hasCredits: true }), "credits");
+  assert.equal(c({ unlimited: true, hasCredits: false }), null, "hasCredits false wins over unlimited");
+  assert.equal(c({ unlimited: true, balance: "0" }), null, "a balance <= 0 wins over unlimited");
+  assert.equal(c({ unlimited: true, balance: "-5" }), null);
+  assert.equal(c({ hasCredits: true }), null, "hasCredits without a balance is not enough");
+  assert.equal(c({ hasCredits: true, balance: "0" }), null);
+  assert.equal(c({ hasCredits: undefined, balance: "5" }), null, "needs hasCredits true or unlimited");
+  assert.equal(c({ hasCredits: true, balance: "1e-7" }), "credits");
+  const x = (paid: Record<string, unknown>) => paidCarriesOn({ paidUsage: { kind: "extraUsage", fetchedAt: 990, stale: false, enabled: true, ...paid } as never }, 1_000);
+  assert.equal(x({}), "extra usage");
+  assert.equal(x({ utilization: 99, monthlyLimit: 500, usedCredits: 499 }), "extra usage");
+  assert.equal(x({ utilization: 100 }), null);
+  assert.equal(x({ monthlyLimit: 500, usedCredits: 500 }), null);
+  assert.equal(x({ enabled: false }), null);
 });
 test("badge: health and renewal precedence stays above the credits label; windows below 100 are unchanged", () => {
   assert.equal(badgeOf({ health: "needsLogin", paidUsage: credits() })?.text, "Needs login");
@@ -357,10 +379,10 @@ test("badge: health and renewal precedence stays above the credits label; window
   assert.equal(badgeOf({ windows: [win("five_hour", { usedPercent: 40 })], paidUsage: credits() })?.text, "Active");
 });
 test("glyph: an account running on credits is a warning, not critical; without credits it stays critical", () => {
-  assert.equal(rowGlyph(acct({ windows: exhausted, paidUsage: credits() }), 80, 100), "warn");
-  assert.equal(rowGlyph(acct({ windows: exhausted, paidUsage: extra() }), 80, 100), "warn");
-  assert.equal(rowGlyph(acct({ windows: exhausted }), 80, 100), "crit");
-  assert.equal(rowGlyph(acct({ windows: exhausted, health: "needsLogin", paidUsage: credits() }), 80, 100), "crit");
+  assert.equal(rowGlyph(acct({ windows: exhausted, paidUsage: credits() }), 80, 100, 1_000), "warn");
+  assert.equal(rowGlyph(acct({ windows: exhausted, paidUsage: extra() }), 80, 100, 1_000), "warn");
+  assert.equal(rowGlyph(acct({ windows: exhausted }), 80, 100, 1_000), "crit");
+  assert.equal(rowGlyph(acct({ windows: exhausted, health: "needsLogin", paidUsage: credits() }), 80, 100, 1_000), "crit");
 });
 test("footer: the 100 % cell stays red but its spoken text says the account runs on credits", () => {
   const item = (account: Account) => ({ provider: "codex" as const, windowId: "seven_day", window: account.windows[1]!, account });

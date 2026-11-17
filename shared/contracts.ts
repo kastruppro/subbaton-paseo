@@ -74,6 +74,8 @@ export const accountSchema = z.object({
   windows: z.array(windowSchema).max(256),
   paidUsage: paidUsageSchema,
   attentionSince: optionalNumber,
+  /** Codex: the official CLI refused this login with a usage limit and SubBaton recorded it (Unix seconds, while live). */
+  limitObservedAt: optionalNumber,
   resetCreditsAvailable: z
     .number()
     .int()

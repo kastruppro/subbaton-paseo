@@ -50,9 +50,7 @@ export function registerHandoff(
     (id) => service.accountUsage("codex", id),
     coordinator.ledger,
     {
-      autoState: () => service.codexAutoState(),
-      refresh: (id) => service.codexRefreshAccount(id),
-      runOnce: () => service.codexAutoRunOnce(),
+      runOnceObserved: (id) => service.codexAutoRunOnceObserved(id),
       onSwitched: () => {
         coordinator.pollEventsSoon();
         nudge();

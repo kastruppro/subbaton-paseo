@@ -77,14 +77,13 @@ export function targetUsage(account: Account, now: number): TargetUsage {
 /** A waiting candidate older than this is dropped (a "Continue" message after days would surprise the owner). */
 export const waitingMaxAgeSeconds = 7 * 86400;
 
-/** A recheck that follows a Codex limit: a fresh read of the active account, then one automatic evaluation. */
+/** A recheck that follows a Codex limit: one `codex auto run-once --limit-observed <active account>` call. */
 export interface LimitRecheck {
-  /** Automatic switching for Codex from the cached status; null when unknown. */
-  autoState(): Promise<"on" | "off" | "paused" | null>;
-  /** Forced fresh read of one account (`codex usage <id> --refresh`); a refusal carries a short reason. */
-  refresh(accountId: string): Promise<{ ok: true; cached?: boolean } | { ok: false; reason: string }>;
-  /** `codex auto run-once`: the decision and its reason. */
-  runOnce(): Promise<{ outcome: string; reason?: string }>;
+  /**
+   * Reports the limit for this account and runs the normal automatic evaluation. `invalidInput` as the outcome
+   * means the CLI is too old to know the flag.
+   */
+  runOnceObserved(accountId: string): Promise<{ outcome: string; reason?: string; limitObserved?: string; limitObservedReason?: string }>;
   /** A switch was made: let the handoff poll the event now instead of at its next minute. */
   onSwitched?(): void;
 }
@@ -239,14 +238,11 @@ export class LimitedAgentRecovery {
       const account = await this.currentAccount().catch(() => null);
       if (!account) return void this.say("recheck skipped reason=no active Codex account in the status");
       this.say(`recheck started provider=codex account=${short(account)}`);
-      const read = await withTimeout(recheck.refresh(account), this.recheckTimeoutMs);
-      if (!read.ok) return void this.say(`recheck skipped reason=refresh refused (${read.reason.slice(0, 80)})`);
-      // Inside the CLI's request floor the answer comes from the cache: not a fresh read, but run-once still runs.
-      this.say(`recheck read provider=codex account=${short(account)} ${read.cached ? "cached (inside the request floor, not a fresh read)" : "fresh"}`);
-      const auto = await recheck.autoState().catch(() => null);
-      if (auto === "off" || auto === "paused") return void this.say(`recheck skipped reason=automatic switching ${auto}`);
-      const decision = await withTimeout(recheck.runOnce(), this.recheckTimeoutMs);
-      this.say(`recheck run-once decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`);
+      const decision = await withTimeout(recheck.runOnceObserved(account), this.recheckTimeoutMs);
+      if (decision.outcome === "invalidInput") return void this.say("recheck skipped reason=CLI too old");
+      this.say(
+        `recheck run-once limitObserved=${(decision.limitObserved ?? "unknown").slice(0, 20)} reason=${(decision.limitObservedReason ?? "none").slice(0, 40)} decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`,
+      );
       if (decision.outcome === "switched") recheck.onSwitched?.();
     } catch (error) {
       this.say(`recheck skipped reason=${error instanceof Error && error.message === "timeout" ? "timeout" : "unexpected error"}`);

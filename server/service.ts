@@ -91,6 +91,7 @@ const failure = (code: string, message: string): ActionResult => ({
 });
 const messages: Record<string, string> = {
   busy: "SubBaton is busy; retry later.",
+  invalidInput: "The SubBaton CLI did not accept the command arguments (it may be too old).",
   stopFailed: "Some agy sessions did not stop safely. Inspect holders before retrying recovery.",
   stopRefused: "agy sessions were not stopped (a desktop, unknown or changed session). Nothing was stopped or switched.",
   ambiguousStores: "Native stores disagree. Inspect the retained copies with the CLI.",
@@ -485,50 +486,25 @@ export class SubBatonService {
   private refreshOne(provider: Provider, account: string): Promise<ActionResult> {
     return this.mutation([...(provider === "claude" ? [] : [provider]), "usage", account, "--refresh"]);
   }
-  /** Codex limit recheck, part 1: a forced read of one account. Only a completed read counts; a `cached` answer (inside the CLI's request floor) is reported as such. */
-  async codexRefreshAccount(account: string): Promise<{ ok: true; cached: boolean } | { ok: false; reason: string }> {
-    if (!uuidLike.test(account)) return { ok: false, reason: "invalid account" };
-    if (this.mutating || this.refreshing) return { ok: false, reason: "another SubBaton action is running" };
+  /**
+   * Codex limit recheck: `codex auto run-once --limit-observed <account>`. The CLI records that the official client refused
+   * this login (no issuer request), then runs the normal evaluation. A switch is adopted by the handoff from the event log.
+   */
+  async codexAutoRunOnceObserved(account: string): Promise<{ outcome: string; reason?: string; limitObserved?: string; limitObservedReason?: string }> {
+    if (!uuidLike.test(account)) return { outcome: "error", reason: "invalid account" };
+    if (this.mutating || this.refreshing) return { outcome: "busy", reason: "another SubBaton action is running" };
     this.mutating = true;
     this.invalidate();
     try {
-      const response = await this.call(["codex", "usage", account, "--refresh"], 120000, true, { kind: "read" });
-      if (response.error) return { ok: false, reason: response.error.outcome === "uncertain" ? "result unknown" : response.error.code.slice(0, 40) };
-      const result = (response.result ?? {}) as { status?: unknown; cached?: unknown };
-      if (result.status === "ok") return { ok: true, cached: result.cached === true };
-      const reasons: Record<string, string> = {
-        "rate-limited": "rate limited or inside the request floor",
-        "usage-unknown-until-active": "access token expired",
-        "access-token-expired": "access token expired",
-        "unverified-isolation": "reading not trusted",
-        "identity-mismatch": "reading not trusted",
-        "needs-renewal": "needs renewal",
-      };
-      return { ok: false, reason: reasons[String(result.status)] ?? "usage unavailable" };
-    } finally {
-      this.invalidate();
-      this.mutating = false;
-    }
-  }
-  /** Codex limit recheck, part 2: is automatic switching on (cached status)? */
-  async codexAutoState(): Promise<"on" | "off" | "paused" | null> {
-    const status = await this.status();
-    const auto = status.data?.providers.find((p) => p.provider === "codex")?.auto;
-    if (!auto) return null;
-    return auto.paused ? "paused" : auto.enabled ? "on" : "off";
-  }
-  /** Codex limit recheck, part 3: `codex auto run-once`. The decision is reported; a switch is adopted by the handoff from the event log. */
-  async codexAutoRunOnce(): Promise<{ outcome: string; reason?: string }> {
-    if (this.mutating) return { outcome: "busy", reason: "another SubBaton action is running" };
-    this.mutating = true;
-    this.invalidate();
-    try {
-      const response = await this.call(["codex", "auto", "run-once"], 120000, true);
-      if (response.error) return { outcome: response.error.outcome === "uncertain" ? "uncertain" : "error", reason: response.error.code };
-      const result = response.result as { outcome?: unknown; reason?: unknown };
+      const response = await this.call(["codex", "auto", "run-once", "--limit-observed", account], 120000, true);
+      if (response.error) return { outcome: response.error.outcome === "uncertain" ? "uncertain" : response.error.code === "invalidInput" ? "invalidInput" : "error", reason: response.error.code.slice(0, 40) };
+      const result = response.result as { outcome?: unknown; reason?: unknown; limitObserved?: unknown; limitObservedReason?: unknown };
+      const text = (value: unknown, max: number) => (typeof value === "string" ? value.slice(0, max) : undefined);
       return {
-        outcome: typeof result.outcome === "string" ? result.outcome.slice(0, 40) : "unknown",
-        ...(typeof result.reason === "string" ? { reason: result.reason.slice(0, 60) } : {}),
+        outcome: text(result.outcome, 40) ?? "unknown",
+        ...(text(result.reason, 60) ? { reason: text(result.reason, 60)! } : {}),
+        ...(text(result.limitObserved, 20) ? { limitObserved: text(result.limitObserved, 20)! } : {}),
+        ...(text(result.limitObservedReason, 40) ? { limitObservedReason: text(result.limitObservedReason, 40)! } : {}),
       };
     } finally {
       this.invalidate();

@@ -24,7 +24,9 @@ export const paidLabelMaxAgeSeconds = 15 * 60;
  * Codex: hasCredits is not false, the balance is not <= 0, and either unlimited or hasCredits true with a balance > 0.
  * Claude: extra usage enabled, utilization < 100, used < monthly limit.
  */
-export function paidCarriesOn(account: Pick<Account, "paidUsage">, now = Date.now() / 1000): "credits" | "extra usage" | null {
+export function paidCarriesOn(account: Pick<Account, "paidUsage" | "limitObservedAt">, now = Date.now() / 1000): "credits" | "extra usage" | null {
+  // Codex said the limit was hit: paid usage did not carry on, whatever the credits reading says.
+  if (account.limitObservedAt != null) return null;
   const paid = account.paidUsage;
   if (!paid || !Number.isFinite(paid.fetchedAt) || now - paid.fetchedAt > paidLabelMaxAgeSeconds) return null;
   if (paid.kind === "credits") {

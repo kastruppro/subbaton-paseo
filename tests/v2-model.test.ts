@@ -397,3 +397,23 @@ test("footer: the 100 % cell stays red but its spoken text says the account runs
   assert.equal(footerSpeech("codex", none), "Codex Weekly, 100 percent used, exhausted".replace("Weekly", none.spoken.replace(/^Codex /, "")));
   assert.doesNotMatch(footerSpeech("codex", none), /running on/);
 });
+
+test("badge: an account with limitObservedAt never says Using credits; Codex said the limit was hit", () => {
+  assert.deepEqual(badgeOf({ active: true, paidUsage: credits(), limitObservedAt: 990 }), { text: "Exhausted", tone: "danger" });
+  assert.deepEqual(badgeOf({ active: false, paidUsage: credits(), limitObservedAt: 990 }), { text: "Exhausted", tone: "danger" });
+  assert.deepEqual(badgeOf({ active: true, paidUsage: extra(), limitObservedAt: 990 }), { text: "Exhausted", tone: "danger" });
+  assert.equal(rowGlyph(acct({ windows: exhausted, paidUsage: credits(), limitObservedAt: 990 }), 80, 100, 1_000), "crit");
+  assert.equal(paidCarriesOn({ paidUsage: credits() as never, limitObservedAt: 990 }, 1_000), null);
+  assert.equal(badgeOf({ active: true, paidUsage: credits() })?.text, "Using credits", "without the marker nothing changes");
+  // below 100 % the marker alone does not invent an Exhausted badge (the core treats the account as exhausted itself)
+  assert.equal(accountBadge(acct({ windows: [win("five_hour", { usedPercent: 40 })], limitObservedAt: 990 }), 80, 100, 1_000)?.text, "Active");
+});
+test("status parsing: limitObservedAt is optional and malformed values are ignored", () => {
+  const base = structuredClone(status) as any;
+  const account = base.providers[0].accounts[0];
+  assert.equal(statusSchema.parse(base).providers[0]!.accounts[0]!.limitObservedAt, undefined);
+  account.limitObservedAt = 1_800_000_000;
+  assert.equal(statusSchema.parse(base).providers[0]!.accounts[0]!.limitObservedAt, 1_800_000_000);
+  account.limitObservedAt = "yesterday";
+  assert.equal(statusSchema.parse(base).providers[0]!.accounts[0]!.limitObservedAt, undefined);
+});

@@ -95,8 +95,6 @@ export interface HookAgent {
   id: string;
   provider: string;
   workspaceId?: string | null;
-  /** ISO time the agent was created, when the host reports it (evidence that its process started after a switch). */
-  createdAt?: string | null;
 }
 export interface RecoveryStore {
   load(): Promise<unknown>;
@@ -113,10 +111,17 @@ const stateSchema = z.object({
     .array(z.object({ agentId: z.string().max(256), state: z.enum(["sent", "turn"]), turnId: z.string().max(256).nullable() }))
     .max(500)
     .default([]),
+  /** When each agent's session last opened (agent.open.before: create, resume, reload); persisted, pruned with the agent. */
+  opened: z.record(z.string().max(256), z.number().finite()).default({}),
 });
 export type RecoveryState = z.infer<typeof stateSchema>;
-const emptyState = (): RecoveryState => ({ schemaVersion: 1, consumed: [], suppressed: [], lineage: [] });
+const emptyState = (): RecoveryState => ({ schemaVersion: 1, consumed: [], suppressed: [], lineage: [], opened: {} });
 
+/** What is known about one limited agent when its turn ends. */
+interface AgentFacts {
+  opened?: number;
+  turnStart?: number;
+}
 interface Candidate {
   turnId: string;
   at: number;
@@ -196,6 +201,7 @@ export class LimitedAgentRecovery {
       consumed: this.state.consumed.slice(-500),
       suppressed: this.state.suppressed.slice(-500),
       lineage: this.state.lineage.slice(-500).map((l) => ({ ...l })),
+      opened: Object.fromEntries(Object.entries(this.state.opened).sort((a, b) => b[1] - a[1]).slice(0, 500)),
     };
     const write = this.writes.then(
       () => this.store.save(snapshot).then(() => true, () => false),
@@ -221,40 +227,43 @@ export class LimitedAgentRecovery {
   }
   private rechecking: Promise<void> | null = null;
   private lastRecheckAt = -Infinity;
-  /** Attribution gathered while a recheck waits for its burst to complete. */
-  private burst: { yes: boolean; old: boolean; account: string | null } | null = null;
+  /** What the plugin knows about the agents of a burst while a recheck collects them. */
+  private burst: AgentFacts[] | null = null;
+  /** When each agent's current turn started (memory only; unknown after a plugin restart). */
+  private turnStarts = new Map<string, number>();
   /** Resolves when the running recheck (if any) is done. */
   recheckIdle(): Promise<void> {
     return this.rechecking ?? Promise.resolve();
   }
+  /** agent.open.before: the agent's session (and so its Codex app-server, with the login it reads then) opens now. */
+  async sessionOpened(agentId: string, reason: string): Promise<void> {
+    await this.init();
+    this.state.opened[agentId] = this.now();
+    this.say(`session opened agent=${short(agentId)} reason=${reason.slice(0, 20)}`);
+    await this.persist();
+  }
   /**
-   * Does this agent provably run on the current login? `--limit-observed` names the CURRENT account, so only an agent
-   * whose process started after that account was activated may report it: reloaded for the current switch (ledger),
-   * or created after the switch. A Paseo Codex agent keeps the login it was started or reloaded with.
+   * Which login does this limited turn belong to? Reference: when the active account was activated. An app-server keeps
+   * the login it started with, so a session opened before the activation is on an old login. A session that opened after
+   * the limited turn started cannot be the process that ran it (a reload in the gap before the hook), so it proves nothing.
    */
-  private attribution(agent: HookAgent): "yes" | "old" | "unknown" {
-    const pending = this.pending;
-    if (!pending) return "unknown";
-    if (this.ledger.state(pending.key, agent.id) === "done") return "yes";
-    const created = agent.createdAt ? Date.parse(agent.createdAt) / 1000 : NaN;
-    if (Number.isFinite(created)) return created > pending.since ? "yes" : "old";
-    return "unknown";
+  private classify(facts: AgentFacts, activatedAt: number | undefined): "current" | "old" | "unknown" {
+    if (facts.opened === undefined || activatedAt === undefined) return "unknown";
+    if (facts.opened < activatedAt) return "old";
+    if (facts.turnStart === undefined) return "unknown";
+    return facts.opened <= facts.turnStart ? "current" : "old";
   }
   /** Single-flight and debounced: several agents hitting the limit together cause one recheck, at most once per minute. */
-  private recheckSoon(agent: HookAgent) {
+  private recheckSoon(facts: AgentFacts) {
     if (!this.recheck) return;
-    const seen = this.attribution(agent);
-    if (this.burst) {
-      // still collecting: this agent joins the burst, one attributed agent is enough to send the flag
-      if (seen === "yes") this.burst.yes = true;
-      if (seen === "old") this.burst.old = true;
-    }
+    // still collecting: this agent joins the burst
+    this.burst?.push(facts);
     const key = `recheck|${Math.floor(this.lastRecheckAt)}`;
     if (this.rechecking) return this.logOnce("", `${key}|running`, `recheck skipped reason=already running`);
     if (this.now() - this.lastRecheckAt < recheckWindowSeconds)
       return this.logOnce("", `${key}|window`, `recheck skipped reason=within ${recheckWindowSeconds} s of the last recheck`);
     this.lastRecheckAt = this.now();
-    this.burst = { yes: seen === "yes", old: seen === "old", account: this.pending?.accountId ?? null };
+    this.burst = [facts];
     const work = this.runRecheck(this.recheck).finally(() => {
       if (this.rechecking === work) this.rechecking = null;
     });
@@ -263,22 +272,28 @@ export class LimitedAgentRecovery {
   private async runRecheck(recheck: LimitRecheck) {
     try {
       await new Promise((resolve) => setTimeout(resolve, this.recheckCollectMs));
-      const burst = this.burst;
+      const burst = this.burst ?? [];
       this.burst = null;
       const account = await this.currentAccount().catch(() => null);
       if (!account) return void this.say("recheck skipped reason=no active Codex account in the status");
       this.say(`recheck started provider=codex account=${short(account)}`);
-      const attributed = !!burst?.yes && burst.account === account;
-      const skipReason = attributed ? "" : burst?.old && !burst.yes ? "agent not on the current login" : "attribution unknown";
+      // Reference: the active account's activation time (status), else the adopted switch of this account.
+      const info = await withTimeout(this.accountUsage?.(account) ?? Promise.resolve(null), this.timeoutMs).catch(() => null);
+      const activatedAt = info?.activatedAt ?? (this.pending?.accountId === account ? this.pending.since : undefined);
+      const kinds = burst.map((facts) => this.classify(facts, activatedAt));
+      // One current or unknown agent is enough; agents known to run on an old login never count.
+      const report = kinds.some((kind) => kind !== "old");
+      if (report && !kinds.includes("current"))
+        this.say("recheck attribution unknown, sent (core plausibility gate applies)");
       const render = (decision: Awaited<ReturnType<LimitRecheck["runOnceObserved"]>>, observed: string) =>
-        `decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`.replace(/^/, observed);
-      let decision = await withTimeout(recheck.runOnceObserved(attributed ? account : null), this.recheckTimeoutMs);
-      if (attributed && decision.outcome === "invalidInput") {
+        `${observed}decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`;
+      let decision = await withTimeout(recheck.runOnceObserved(report ? account : null), this.recheckTimeoutMs);
+      if (report && decision.outcome === "invalidInput") {
         // An older CLI does not know the flag: the immediate evaluation still runs, plain, once.
         decision = await withTimeout(recheck.runOnceObserved(null), this.recheckTimeoutMs);
         this.say(`recheck ${render(decision, "limitObserved=unsupported (invalidInput), fell back to plain run-once ")}`);
-      } else if (!attributed) {
-        this.say(`recheck run-once ${render(decision, `limitObserved=skipped reason=${skipReason} `)}`);
+      } else if (!report) {
+        this.say(`recheck run-once ${render(decision, "limitObserved=skipped reason=agent not on the current login ")}`);
       } else {
         this.say(
           `recheck run-once limitObserved=${(decision.limitObserved ?? "unknown").slice(0, 20)} reason=${(decision.limitObservedReason ?? "none").slice(0, 40)} decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`,
@@ -307,6 +322,7 @@ export class LimitedAgentRecovery {
     await (async () => {
       if (agent.provider !== "codex") return;
       await this.init();
+      this.turnStarts.set(agent.id, this.now());
       this.forget(agent.id, "turn started again");
       const entry = this.lineageOf(agent.id);
       if (entry?.state === "sent") entry.turnId = turnId, (entry.state = "turn");
@@ -331,7 +347,7 @@ export class LimitedAgentRecovery {
       const via = limitMatch(outcome);
       if (via) {
         // The switch decision does not depend on whether we may message this agent: every positive limit rechecks.
-        this.recheckSoon(agent);
+        this.recheckSoon({ opened: this.state.opened[agent.id], turnStart: this.turnStarts.get(agent.id) });
         if (continuation) {
           // A limited continuation is never continued again until new user activity.
           if (!this.state.suppressed.includes(agent.id)) this.state.suppressed.push(agent.id);
@@ -357,6 +373,8 @@ export class LimitedAgentRecovery {
     await this.init();
     this.forget(agentId, "archived");
     this.dropLineage(agentId);
+    delete this.state.opened[agentId];
+    this.turnStarts.delete(agentId);
     await this.persist();
   }
 

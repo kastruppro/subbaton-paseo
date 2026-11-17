@@ -83,7 +83,7 @@ test("host wiring registers the RPCs, uses the context's agent API and nudges on
   assert.ok(saved);
   assert.equal(((await handlers.get("handoff.request")!({ provider: "claude", target }, {})) as { result: { code: string } }).result.code, "invalidInput");
   host.cleanup();
-  assert.equal(removed, 3);
+  assert.equal(removed, 4);
 });
 
 test("host wiring continues a limited Codex agent once after a verified switch with a daemon restart", async () => {

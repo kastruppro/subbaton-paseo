@@ -76,6 +76,8 @@ export const accountSchema = z.object({
   attentionSince: optionalNumber,
   /** Codex: the official CLI refused this login with a usage limit and SubBaton recorded it (Unix seconds, while live). */
   limitObservedAt: optionalNumber,
+  /** When this account became the active one (Unix seconds); the reference for "is this agent on the current login". */
+  activatedAt: optionalNumber,
   resetCreditsAvailable: z
     .number()
     .int()

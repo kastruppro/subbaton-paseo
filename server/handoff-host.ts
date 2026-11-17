@@ -87,11 +87,17 @@ export function registerHandoff(
     nudge(port);
     return response;
   });
-  type HookEvent = { agent?: { id: string; provider: string; workspaceId?: string | null; createdAt?: string | null }; turnId?: string | null; outcome?: TurnOutcome };
+  type HookEvent = { agent?: { id: string; provider: string; workspaceId?: string | null }; turnId?: string | null; outcome?: TurnOutcome };
   const removeBefore = server.addHook("agent.turn.before", async (event, context) => {
     capture(context);
     const e = event as HookEvent;
     if (e.agent) await recovery.turnBefore(e.agent, e.turnId ?? null).catch(() => undefined);
+  });
+  // A reload (and a create or resume) opens the agent's session again: the start time says which login its app-server has.
+  const removeOpen = server.addHook("agent.open.before", async (payload) => {
+    const request = (payload as { request?: { agentId?: string; provider?: string; reason?: string } }).request;
+    if (request?.provider === "codex" && typeof request.agentId === "string")
+      await recovery.sessionOpened(request.agentId, String(request.reason ?? "unknown")).catch(() => undefined);
   });
   const removeArchive = server.addHook("agent.archive.after", async (event) => {
     const e = event as HookEvent;
@@ -118,6 +124,7 @@ export function registerHandoff(
       clearInterval(timer);
       removeHook();
       removeBefore();
+      removeOpen();
       removeArchive();
     },
   };

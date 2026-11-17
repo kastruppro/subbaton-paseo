@@ -41,3 +41,18 @@ All three are covered by the disposable-agent live gate (testuser, not the owner
 - **No loops:** a continuation we sent is tracked (`lineage`, persisted). If its turn ends in a limit again the agent is suppressed until a turn we did not send (user activity) starts. A completed continuation ends the lineage.
 - **State file:** `~/Library/Application Support/SubBaton Paseo/limited-agents-v1.json` (owner-only, atomic, bounded): consumed attempt keys, suppressed agent IDs, lineage. No messages, tokens or prompts. An unreadable file means nothing is recorded or sent.
 - Daemon reload of other idle agents (existing handoff) never grants continuation permission.
+
+## Immediate recheck after a Codex limit (0.9.8)
+
+Every positive Codex limit starts one recheck (single flight, at most once per 60 s, a 250 ms collection window per burst): `codex auto run-once --limit-observed <active-account-id> --json`, or a plain `codex auto run-once --json` when no agent of the burst can be on the current login. A switch is adopted from the event log at once and flows through the handoff ledger as usual.
+
+**Which login did the limited agent use?** A Paseo Codex agent keeps the login its app-server started with. The plugin therefore records when each agent's session opened (`agent.open.before`: create, resume, reload; persisted in the recovery state, pruned with the agent) and compares it with the active account's `activatedAt` from the status:
+
+- opened after `activatedAt` and before the limited turn started: on the current login, the flag is sent;
+- opened before `activatedAt`: on an old login, never counted (plain run-once, `limitObserved=skipped reason=agent not on the current login`);
+- opened after the limited turn started (a reload in the gap before the hook): not the process that ran the turn, never counted;
+- unknown (no open record, an unknown turn start, no `activatedAt`): the flag is sent (`recheck attribution unknown, sent (core plausibility gate applies)`); the core ignores it when a recent real reading shows every window under 90 %.
+
+One current or unknown agent in a burst is enough; known-old agents never count. If the CLI does not know the flag (`invalidInput`), the recheck falls back once to a plain run-once.
+
+**To verify live:** that a handoff `reload()` fires `agent.open.before` (reason `refresh` or `resume`). The plugin logs `limited-agents: session opened agent=<8> reason=<...>` for every open, so the owner can confirm it in `paseo plugin logs subbaton`. Until it is confirmed, reloaded agents are "unknown" (flag sent) rather than "current".

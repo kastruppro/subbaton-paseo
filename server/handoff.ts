@@ -489,6 +489,10 @@ export class HandoffCoordinator {
         : `A newer switch took over; reloading after automatic switches is off, so ${open} ${open === 1 ? "agent was" : "agents were"} not reloaded.`,
     });
   }
+  /** The next tick polls the event log at once (a switch was just made by the limit recheck). */
+  pollEventsSoon() {
+    this.lastEventPoll = -Infinity;
+  }
   private async pollEvents() {
     const open = this.state.handoffs.codex;
     if (this.now() - this.lastEventPoll < 60 || (!terminal(open) && !supersedable(open))) return;

@@ -77,6 +77,20 @@ export function targetUsage(account: Account, now: number): TargetUsage {
 /** A waiting candidate older than this is dropped (a "Continue" message after days would surprise the owner). */
 export const waitingMaxAgeSeconds = 7 * 86400;
 
+/** A recheck that follows a Codex limit: a fresh read of the active account, then one automatic evaluation. */
+export interface LimitRecheck {
+  /** Automatic switching for Codex from the cached status; null when unknown. */
+  autoState(): Promise<"on" | "off" | "paused" | null>;
+  /** Forced fresh read of one account (`codex usage <id> --refresh`); a refusal carries a short reason. */
+  refresh(accountId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** `codex auto run-once`: the decision and its reason. */
+  runOnce(): Promise<{ outcome: string; reason?: string }>;
+  /** A switch was made: let the handoff poll the event now instead of at its next minute. */
+  onSwitched?(): void;
+}
+/** At most one recheck per provider in this window. */
+export const recheckWindowSeconds = 60;
+
 export interface HookAgent {
   id: string;
   provider: string;
@@ -142,6 +156,8 @@ export class LimitedAgentRecovery {
     private accountUsage?: (accountId: string) => Promise<Account | null>,
     /** Shared with the handoff: one reload per agent per switch. */
     private ledger: ReloadLedger = new ReloadLedger(),
+    /** Optional: re-read the active account and evaluate automatic switching right after a Codex limit. */
+    private recheck?: LimitRecheck,
   ) {}
 
   private say(message: string) {
@@ -197,6 +213,43 @@ export class LimitedAgentRecovery {
   private clearLogged(agentId: string) {
     for (const key of [...this.waitLogged]) if (key.startsWith(`${agentId}\0`)) this.waitLogged.delete(key);
   }
+  private rechecking: Promise<void> | null = null;
+  private lastRecheckAt = -Infinity;
+  /** Resolves when the running recheck (if any) is done. */
+  recheckIdle(): Promise<void> {
+    return this.rechecking ?? Promise.resolve();
+  }
+  /** Single-flight and debounced: several agents hitting the limit together cause one recheck, at most once per minute. */
+  private recheckSoon() {
+    if (!this.recheck) return;
+    const burst = `recheck|${Math.floor(this.lastRecheckAt)}`;
+    if (this.rechecking) return this.logOnce("", `${burst}|running`, `recheck skipped reason=already running`);
+    if (this.now() - this.lastRecheckAt < recheckWindowSeconds)
+      return this.logOnce("", `${burst}|window`, `recheck skipped reason=within ${recheckWindowSeconds} s of the last recheck`);
+    this.lastRecheckAt = this.now();
+    const work = this.runRecheck(this.recheck).finally(() => {
+      if (this.rechecking === work) this.rechecking = null;
+    });
+    this.rechecking = work;
+  }
+  private async runRecheck(recheck: LimitRecheck) {
+    try {
+      const account = await this.currentAccount().catch(() => null);
+      if (!account) return void this.say("recheck skipped reason=no active Codex account in the status");
+      this.say(`recheck started provider=codex account=${short(account)}`);
+      const read = await withTimeout(recheck.refresh(account), this.timeoutMs);
+      if (!read.ok) return void this.say(`recheck skipped reason=refresh refused (${read.reason.slice(0, 80)})`);
+      this.say(`recheck read provider=codex account=${short(account)} fresh`);
+      const auto = await recheck.autoState().catch(() => null);
+      if (auto === "off" || auto === "paused") return void this.say(`recheck skipped reason=automatic switching ${auto}`);
+      const decision = await withTimeout(recheck.runOnce(), Math.max(this.timeoutMs, 120_000));
+      this.say(`recheck run-once decision=${decision.outcome.slice(0, 40)} reason=${(decision.reason ?? "none").slice(0, 60)}`);
+      if (decision.outcome === "switched") recheck.onSwitched?.();
+    } catch {
+      this.say("recheck skipped reason=unexpected error");
+    }
+  }
+
   private forget(agentId: string, reason?: string) {
     this.clearLogged(agentId);
     if (this.candidates.delete(agentId) && reason) this.say(`candidate dropped agent=${short(agentId)} reason=${reason}`);
@@ -248,6 +301,7 @@ export class LimitedAgentRecovery {
         else {
           this.candidates.set(agent.id, { turnId, at: this.now() });
           this.say(`limit detected agent=${who} provider=codex via=${via} turn=${short(turnId)}`);
+          this.recheckSoon();
         }
       } else if (continuation) {
         this.dropLineage(agent.id);

@@ -49,6 +49,15 @@ export function registerHandoff(
     undefined,
     (id) => service.accountUsage("codex", id),
     coordinator.ledger,
+    {
+      autoState: () => service.codexAutoState(),
+      refresh: (id) => service.codexRefreshAccount(id),
+      runOnce: () => service.codexAutoRunOnce(),
+      onSwitched: () => {
+        coordinator.pollEventsSoon();
+        nudge();
+      },
+    },
   );
   coordinator.onCodexAdopted = (key, account, switchedAt) =>
     void recovery

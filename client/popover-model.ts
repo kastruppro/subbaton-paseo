@@ -8,7 +8,7 @@ import type { StrategyPreview } from "../shared/contracts.js";
 import type { Handoff } from "../shared/handoff.js";
 import { activePhases } from "../shared/handoff.js";
 import { accountTone, lastRead, providerLabel, severity, shortWarning, windowPresentation } from "./display.js";
-import { attentionLine, paidUsageLines, type PaidLine } from "./paid-model.js";
+import { attentionLine, paidCarriesOn, paidUsageLines, type PaidLine } from "./paid-model.js";
 
 const groupName = (id: string) =>
   id.startsWith("gemini:") ? "Gemini" : id.startsWith("claude-gpt:") ? "C/GPT" : "";
@@ -84,7 +84,15 @@ export function accountBadge(
   if (account.health === "attention") return { text: "Login check failed", tone: "warning" };
   if (account.usageStatus === "needs-renewal" || account.usageStatus === "needsRenewal")
     return { text: "Needs renewal", tone: "warning" };
-  if (worst >= 100) return { text: "Exhausted", tone: "danger" };
+  if (worst >= 100) {
+    // Paid usage can carry on (SubBaton may have switched here on purpose): it costs money, so a warning, not a danger.
+    const paid = paidCarriesOn(account);
+    if (paid)
+      return account.active
+        ? { text: paid === "credits" ? "Using credits" : "Using extra usage", tone: "warning" }
+        : { text: paid === "credits" ? "Exhausted, credits left" : "Exhausted, extra usage on", tone: "warning" };
+    return { text: "Exhausted", tone: "danger" };
+  }
   if (account.active) return { text: "Active", tone: "normal" };
   if (worst >= warning && severity(worst, false, warning, danger) !== "normal")
     return { text: "Near limit", tone: "warning" };
@@ -96,7 +104,9 @@ export function rowGlyph(
   danger: number,
 ): "ok" | "warn" | "crit" | "mute" {
   if (!account) return "mute";
-  const tone = accountTone(account, warning, danger);
+  let tone = accountTone(account, warning, danger);
+  // An exhausted account that keeps working on paid usage is a warning; blocked health stays critical.
+  if (tone === "danger" && !["needsLogin", "quarantined", "deviceBlocked"].includes(account.health) && paidCarriesOn(account)) tone = "warning";
   return tone === "normal" ? "ok" : tone === "warning" ? "warn" : tone === "danger" ? "crit" : "mute";
 }
 export function otherAccountSummary(

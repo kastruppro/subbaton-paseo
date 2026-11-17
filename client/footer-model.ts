@@ -2,7 +2,7 @@ import type { Account, Provider, Window } from "../shared/contracts.js";
 import { maxFooterItems } from "../shared/contracts.js";
 import { percentText, providerLabel, severity, stale } from "./display.js";
 import { isModelQuota, windowLabel } from "./popover-model.js";
-import { paidFooterValue, paidSpokenValue, paidStale } from "./paid-model.js";
+import { paidCarriesOn, paidFooterValue, paidSpokenValue, paidStale } from "./paid-model.js";
 
 /** Three equal columns like Paseo's CPU / Memory / Disk box; 1-3 items one row, 4-6 two rows. */
 export function footerGrid(count: number) {
@@ -31,6 +31,8 @@ export type FooterCell = {
   meter: boolean;
   /** Text colour token: the host foreground (as in Paseo's CPU box), status colour only near or at the limit. */
   textTone: "text" | "warning" | "danger";
+  /** A 100 % window on an account that keeps working on paid usage: spoken only, the meter stays red. */
+  paidNote?: "credits" | "extra usage";
   /** Credits item only: the value as spoken ("71,023 credits"). */
   spokenValue?: string;
   /** Full spoken name of the item without the provider, e.g. "Claude and GPT 5 hours" or "credits". */
@@ -89,8 +91,10 @@ export function footerCell(
     return { kind: "blocked", label, percent: "—", tone: "danger", fill: 0, clock: false, meter: true, textTone: "danger", spoken };
   if (!window || value === null || passed)
     return { kind: "unknown", label, percent: "—", tone: "unknown", fill: 0, clock: false, meter: true, textTone: "text", spoken };
-  if (value >= 100 && !window.inferred)
-    return { kind: "blocked", label, percent: "100%", tone: "danger", fill: 100, clock: false, meter: true, textTone: "danger", spoken };
+  if (value >= 100 && !window.inferred) {
+    const paid = account ? paidCarriesOn(account) : null;
+    return { kind: "blocked", label, percent: "100%", tone: "danger", fill: 100, clock: false, meter: true, textTone: "danger", spoken, ...(paid ? { paidNote: paid } : {}) };
+  }
   const old = stale(window, opts.offline, now);
   const text = percentText(value, old, window.inferred);
   const level = severity(value, false, opts.warning, opts.danger);
@@ -145,7 +149,7 @@ export function footerSpeech(provider: Provider, cell: FooterCell): string {
   const subject = `${providerLabel[provider]} ${cell.spoken}`;
   if (cell.kind === "unknown") return `${subject}, unknown`;
   if (cell.kind === "blocked")
-    return cell.percent === "100%" ? `${subject}, 100 percent used, exhausted` : `${subject}, unavailable`;
+    return cell.percent === "100%" ? `${subject}, 100 percent used, exhausted${cell.paidNote ? `, running on ${cell.paidNote}` : ""}` : `${subject}, unavailable`;
   const stale = cell.kind === "stale";
   if (!cell.meter) {
     const value = cell.spokenValue ?? (stale ? cell.percent.replace(/^~/, "") : cell.percent).replace("∞", "unlimited");

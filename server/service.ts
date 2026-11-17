@@ -485,6 +485,39 @@ export class SubBatonService {
   private refreshOne(provider: Provider, account: string): Promise<ActionResult> {
     return this.mutation([...(provider === "claude" ? [] : [provider]), "usage", account, "--refresh"]);
   }
+  /** Codex limit recheck, part 1: a forced fresh read of one account. Only a completed read counts; floors and backoff are the CLI's. */
+  async codexRefreshAccount(account: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!uuidLike.test(account)) return { ok: false, reason: "invalid account" };
+    const result = await this.refreshOne("codex", account);
+    if (result.outcome === "success") return { ok: true };
+    const reasons: Record<string, string> = { rateLimited: "rate limited or inside the request floor", accessExpired: "access token expired", unverifiedUsage: "reading not trusted", usageUnavailable: "usage unavailable", busy: "another SubBaton action is running", needsRenewal: "needs renewal" };
+    return { ok: false, reason: reasons[result.code] ?? result.code.slice(0, 40) };
+  }
+  /** Codex limit recheck, part 2: is automatic switching on (cached status)? */
+  async codexAutoState(): Promise<"on" | "off" | "paused" | null> {
+    const status = await this.status();
+    const auto = status.data?.providers.find((p) => p.provider === "codex")?.auto;
+    if (!auto) return null;
+    return auto.paused ? "paused" : auto.enabled ? "on" : "off";
+  }
+  /** Codex limit recheck, part 3: `codex auto run-once`. The decision is reported; a switch is adopted by the handoff from the event log. */
+  async codexAutoRunOnce(): Promise<{ outcome: string; reason?: string }> {
+    if (this.mutating) return { outcome: "busy", reason: "another SubBaton action is running" };
+    this.mutating = true;
+    this.invalidate();
+    try {
+      const response = await this.call(["codex", "auto", "run-once"], 120000, true);
+      if (response.error) return { outcome: response.error.outcome === "uncertain" ? "uncertain" : "error", reason: response.error.code };
+      const result = response.result as { outcome?: unknown; reason?: unknown };
+      return {
+        outcome: typeof result.outcome === "string" ? result.outcome.slice(0, 40) : "unknown",
+        ...(typeof result.reason === "string" ? { reason: result.reason.slice(0, 60) } : {}),
+      };
+    } finally {
+      this.invalidate();
+      this.mutating = false;
+    }
+  }
   /** One saved account's usage read, for the popover's per-account refresh. The account must be a known, enabled one of that provider. */
   async refreshAccount(input: unknown): Promise<ActionResult> {
     const parsed = refreshAccountInput.safeParse(input);
